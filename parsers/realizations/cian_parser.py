@@ -1,8 +1,14 @@
-import requests
+from typing import TypeVar
 
+import requests
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 
 from interfaces.parser_interfaces import IParcer
+from model.site_parse_data_model import SiteParseData
+
+T = TypeVar("T")
+
 
 class CianParser(IParcer):
     def __init__(self) -> None:
@@ -14,49 +20,71 @@ class CianParser(IParcer):
 
         self.url = "https://cian.ru/cat.php?deal_type=sale&engine_version=2&location%5B0%5D={city_id}&offer_type=flat&region={city_id}&p={page}&source=search_string"
 
-        self.max_pages = 100
+        self.max_pages = 1
 
-    def _parsePage(self, city_id: int, page: int) -> bool|str:
-        response = requests.get(self.url.format(city_id=city_id, page=page), headers=self.headers)
-    
-        if response.status_code != 200:
-            return False
+    def parse(self, city_id: int) -> tuple[bool, SiteParseData | None]:
+        parsed_pages: list[SiteParseData | None] = []
 
-        text_html = response.text
-
-        soap = BeautifulSoup(text_html, "html.parser")
-
-        context = soap.find("div", id="frontend-serp")
-
-        if context is None: return False
-        
-        context = context.find("div")
-
-        if context is None: return False
-
-        context = context.find("div")
-
-        if context is None: return False
-
-        context = context.find("div", class_="x31de4314--dc3fb1--wrapper")
-
-        if context is None: return False
-
-        return str(context)
-
-    def parse(self, city_id: int) -> bool|str:
-
-        list_of_pages = []
-        
         for page in range(1, self.max_pages + 1):
-            res = self._parsePage(city_id, page)
+            success, result = self._parsePage(city_id, page)
 
-            if res is False:
+            if not success:
                 break
 
-            # list_of_pages.append(res)
+            parsed_pages.append(result)
 
+        if parsed_pages:
+            return True, parsed_pages[0]
 
-        return False
-    
+        return False, SiteParseData(url="", imgs=[])
+
+    def _parsePage(self, city_id: int, page: int) -> tuple[bool, SiteParseData | None]:
+        page_url = self.url.format(city_id=city_id, page=page)
+
+        response = requests.get(page_url, headers=self.headers)
+
+        if response.status_code != 200:
+            raise Exception("Failed to fetch the page")
+
+        cards = self._find_cards(response.text)
+
+        images: list[str] = []
+
+        for card in cards:
+            images.extend(self._extract_card_images(card))
+
+        return True, SiteParseData(url=page_url, imgs=images)
+
+    def _find_cards(self, html: str) -> list[Tag]:
+        soup = BeautifulSoup(html, "html.parser")
+
+        context = self._require(soup.find("div", id="frontend-serp"), "No context")
+
+        for _ in range(2):
+            context = self._require(context.find("div"), "No context")
+
+        return context.find_all("article", attrs = {"data-name": "CardComponent"})
+
+    def _extract_card_images(self, card: Tag) -> list[str]:
+        link = self._require(card.find("a"), "No href")
+
+        gallery = self._require(link.find("div", attrs = {"data-name": "Gallery"}), "No content")
+
+        gallery_content = self._require(gallery.find("div"), "No content")
+
+        images_container = self._require(gallery_content.find("ul"), "No content")
+
+        images = images_container.find_all("img")
+
+        if not images:
+            raise Exception("No images")
+
+        return [str(image.get("src")) for image in images]
+
+    @staticmethod
+    def _require(element: T | None, message: str) -> T:
+        if element is None:
+            raise Exception(message)
+
+        return element
 

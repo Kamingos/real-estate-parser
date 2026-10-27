@@ -1,3 +1,6 @@
+import json
+from dataclasses import asdict
+
 import realizations.cian_parser
 
 cities = {"vladivostok": 4701, "moscow": 1}
@@ -6,10 +9,11 @@ cities = {"vladivostok": 4701, "moscow": 1}
 if __name__ == "__main__":
     cian_parser = realizations.cian_parser.CianParser()
 
-    res = cian_parser.parse(cities["vladivostok"])
-                            
-    if res is False:
-        print("Error")
+    success, result = cian_parser.parse(cities["vladivostok"])
 
-    with open("result.html", "w", encoding="utf-8") as file:
-        file.write(str(res))
+    if not success or result is None:
+        print("Error")
+        raise SystemExit(1)
+
+    with open("result.json", "w", encoding="utf-8") as file:
+        json.dump(asdict(result), file, indent=4, ensure_ascii=False)

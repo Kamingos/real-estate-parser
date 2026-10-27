@@ -25,6 +25,18 @@ wheels = [
 ]
 
 [[package]]
+name = "bs4"
+version = "0.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "beautifulsoup4" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c9/aa/4acaf814ff901145da37332e05bb510452ebed97bc9602695059dd46ef39/bs4-0.0.2.tar.gz", hash = "sha256:a48685c58f50fe127722417bae83fe6badf500d54b55f7e39ffe43b798653925", size = 698, upload-time = "2024-01-17T18:15:47.371Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/bb/bf7aab772a159614954d84aa832c129624ba6c32faa559dfb200a534e50b/bs4-0.0.2-py2.py3-none-any.whl", hash = "sha256:abf8742c0805ef7f662dce4b51cca104cffe52b835238afc169142ab9b3fbccc", size = 1189, upload-time = "2024-01-17T18:15:48.613Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.10.23"
 source = { registry = "https://pypi.org/simple" }
@@ -308,17 +320,21 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
+    { name = "bs4" },
     { name = "lxml" },
     { name = "requests" },
     { name = "selenium" },
+    { name = "typedict" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.15.0" },
+    { name = "bs4", specifier = ">=0.0.2" },
     { name = "lxml", specifier = ">=6.1.3" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "selenium", specifier = ">=4.51.0" },
+    { name = "typedict", specifier = ">=0.1.0" },
 ]
 
 [[package]]
@@ -427,6 +443,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d1/3c/8b4358e81f2f2cfe71b66a267f023a91db20a817b9425dd964873796980a/trio_websocket-0.12.2.tar.gz", hash = "sha256:22c72c436f3d1e264d0910a3951934798dcc5b00ae56fc4ee079d46c7cf20fae", size = 33549, upload-time = "2025-02-25T05:16:58.947Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/19/eb640a397bba49ba49ef9dbe2e7e5c04202ba045b6ce2ec36e9cadc51e04/trio_websocket-0.12.2-py3-none-any.whl", hash = "sha256:df605665f1db533f4a386c94525870851096a223adcb97f72a07e8b4beba45b6", size = 21221, upload-time = "2025-02-25T05:16:57.545Z" },
+]
+
+[[package]]
+name = "typedict"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/89/cc/6605fe716f4837230d6fae81443ca7da2213c943626c2169b9c57ad88249/typedict-0.1.0.tar.gz", hash = "sha256:d66a300f1d0b8e596b930d1a892dc95171de539b414cb8971b9b70826181de51", size = 9277, upload-time = "2025-10-23T19:45:00.507Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/67/96f1c2c1ab25ffd2d930b7f02810444d141530fc29428e5a5ec4fe2812ef/typedict-0.1.0-py3-none-any.whl", hash = "sha256:361be2b0155e7ef3debfaeec504655f7b1faa74ee89c36eead61c99425ca3a26", size = 6625, upload-time = "2025-10-23T19:44:59.132Z" },
 ]
 
 [[package]]
