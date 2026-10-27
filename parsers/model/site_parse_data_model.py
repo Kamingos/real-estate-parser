@@ -1,28 +1,34 @@
 from dataclasses import dataclass, field
+from typing import TypedDict
 
-from typedict import TypeDict
 
-class geoLabelDict(TypeDict):
-    region: str # округ
-    city: str # город
-    district: str # район
-    micro_district: str #микрорайон, если есть
-    street: str # улица
-    house: str # номер дома
+class geoLabelDict(TypedDict):
+    region: str
+    city: str
+    district: str
+    micro_district: str
+    street: str
+    house: str
+
 
 @dataclass
 class SiteParseData:
+    site: str = field(default_factory=str)
     url: str = field(default_factory=str)
     name: str = field(default_factory=str)
+    subtitles: str = field(default_factory=str)
     description: str = field(default_factory=str)
     price: int = field(default_factory=int)
     imgs: list[str] = field(default_factory=list)
-    residential_complex: str = field(default_factory=str) # жилой комплекс, если прописан
-    geo_label: geoLabelDict = field(default_factory=geoLabelDict)
-
-
-
-
-
-
-
+    residential_complex: str = field(default_factory=str)
+    floor: int = field(default_factory=int)
+    area: float = field(default_factory=float)
+    rooms_count: int = field(default_factory=int)
+    geo_label: geoLabelDict = field(default_factory=lambda: {
+        "region": "",
+        "city": "",
+        "district": "",
+        "micro_district": "",
+        "street": "",
+        "house": ""
+    })
