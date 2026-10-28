@@ -8,9 +8,5 @@ class IParcer(ABC):
     def parse(self, parserConfig: ParserConfig) -> tuple[bool, list[SiteParseData] | None]:
         pass
 
-    @abstractmethod
-    def _parsePage(self, city_id: int, page: int) -> tuple[bool, list[SiteParseData] | None]:
-        pass
-
 
     

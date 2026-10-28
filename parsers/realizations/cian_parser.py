@@ -51,7 +51,7 @@ class CianParser(IParcer):
                 offers_list.extend(result)
                 print(f"[+] cian parser: just appended {len(result)} offers from page {page}, city {city_key}")
 
-                if (page < self.max_pages): sleep(uniform(parserConfig.min_iteration_time_span, parserConfig.max_iteration_time_span)) # Время ожидания между сессиями
+                if (page < parserConfig.max_page_iteration): sleep(uniform(parserConfig.min_iteration_time_span, parserConfig.max_iteration_time_span)) # Время ожидания между сессиями
 
         print(f"[+] cian parser: total {len(offers_list)} offers")
         return True, offers_list
