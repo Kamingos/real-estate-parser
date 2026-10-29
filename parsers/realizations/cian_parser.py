@@ -146,7 +146,7 @@ class CianParser(IParcer):
             geo_label=self._extract_geo_labels(geo_labels),
             floor=floor,
             area=area,
-            rooms_count=rooms_count
+            rooms_count=str(rooms_count)
         )
 
     def _extract_card_images(self, card: Tag) -> list[str]:

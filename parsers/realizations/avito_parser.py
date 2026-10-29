@@ -1,24 +1,31 @@
+
+import os
 import re
 import webbrowser
 
-from urllib.parse import urljoin, urlparse, urlunparse
-from time import sleep
-from random import uniform
-from typing import Literal, TypeAlias
+import requests
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from dadata import Dadata
+
+from random import uniform
+from time import sleep
+from typing import Literal, TypeAlias
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+from selenium import webdriver
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+
 from interfaces.parser_interfaces import IParcer
 from model.parser_config import ParserConfig
 from model.site_parse_data_model import SiteParseData, geoLabelDict
+
 
 PAGE_WAIT_TIME = 10
 
@@ -32,43 +39,59 @@ ObjectType: TypeAlias = Literal[
     "other",
 ]
 
+
 class AvitoParser(IParcer):
+
     def __init__(self):
-        
+        with open("dadadata_token.txt", "r", encoding="utf-8") as key_file:
+            self.dadata_api_key = str(key_file.read)
+            
+        self.dadata = Dadata(self.dadata_api_key)
+
         self.refs = {
-        "flat/studio": (
-            "https://www.avito.ru/vladivostok/kvartiry/prodam-ASgBAgICAUSSA8YQ"
-            "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Ik1Hbms0NVdCYU1SeElremciO33Do1akJgAAAA"
-            "&localPriority=0&p={page}"
-        ),
-        "room": (
-            "https://www.avito.ru/vladivostok/komnaty/prodam-ASgBAgICAUSQA7wQ"
-            "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Ims5ZkhvUUFwTGJicWR1cGEiO33Idg0EJgAAAA"
-            "&localPriority=0&p={page}"
-        ),
-        "house": (
-            "https://www.avito.ru/vladivostok/doma_dachi_kottedzhi/prodam-ASgBAgICAUSUA9AQ"
-            "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6ImdBbjNKTGlKeGxEWDVKbngiO3367d43JgAAAA"
-            "&localPriority=0&p={page}"
-        ),
-        "land_plot": (
-            "https://www.avito.ru/vladivostok/zemelnye_uchastki/prodam-ASgBAgICAUSWA9oQ"
-            "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6InNhQTVsSjhmV1pTZEo1aE8iO300GHrYJgAAAA"
-            "&localPriority=0&p={page}"
-        ),
-        "garage": (
-            "https://www.avito.ru/vladivostok/garazhi_i_mashinomesta/prodam-ASgBAgICAUSYA~QQ"
-            "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6ImgyMXNNQ2VWQkxaNlQ0YkciO33mvNP-JgAAAA"
-            "&localPriority=0&p={page}"
-        ),
-        "other": (
-            "https://www.avito.ru/vladivostok/kommercheskaya_nedvizhimost/prodam-ASgBAgICAUSwCNJW"
-            "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Imo2SnJ2d0hOZElKdnNOMlkiO31-kt2FJgAAAA"
-            "&f=ASgBAgICAkSwCNJW8hKg2gE&localPriority=0&p={page}"
-        ),
-    }
+            "flat/studio": (
+                "https://www.avito.ru/vladivostok/kvartiry/prodam-ASgBAgICAUSSA8YQ"
+                "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Ik1Hbms0NVdCYU1SeElremciO33Do1akJgAAAA"
+                "&localPriority=0&p={page}"
+            ),
+            "room": (
+                "https://www.avito.ru/vladivostok/komnaty/prodam-ASgBAgICAUSQA7wQ"
+                "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Ims5ZkhvUUFwTGJicWR1cGEiO33Idg0EJgAAAA"
+                "&localPriority=0&p={page}"
+            ),
+            "house": (
+                "https://www.avito.ru/vladivostok/doma_dachi_kottedzhi/prodam-ASgBAgICAUSUA9AQ"
+                "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6ImdBbjNKTGlKeGxEWDVKbngiO3367d43JgAAAA"
+                "&localPriority=0&p={page}"
+            ),
+            "land_plot": (
+                "https://www.avito.ru/vladivostok/zemelnye_uchastki/prodam-ASgBAgICAUSWA9oQ"
+                "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6InNhQTVsSjhmV1pTZEo1aE8iO300GHrYJgAAAA"
+                "&localPriority=0&p={page}"
+            ),
+            "garage": (
+                "https://www.avito.ru/vladivostok/garazhi_i_mashinomesta/prodam-ASgBAgICAUSYA~QQ"
+                "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6ImgyMXNNQ2VWQkxaNlQ0YkciO33mvNP-JgAAAA"
+                "&localPriority=0&p={page}"
+            ),
+            "other": (
+                "https://www.avito.ru/vladivostok/kommercheskaya_nedvizhimost/prodam-ASgBAgICAUSwCNJW"
+                "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Imo2SnJ2d0hOZElKdnNOMlkiO31-kt2FJgAAAA"
+                "&f=ASgBAgICAkSwCNJW8hKg2gE&localPriority=0&p={page}"
+            ),
+        }
         
+        # self.refs = {
+        #             "flat/studio": (
+        #                 "https://www.avito.ru/vladivostok/kvartiry/prodam-ASgBAgICAUSSA8YQ"
+        #                 "?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Ik1Hbms0NVdCYU1SeElremciO33Do1akJgAAAA"
+        #                 "&localPriority=0&p={page}"
+        #             ),
+        # }
+
         self.options = Options()
+        self.options.page_load_strategy = "eager"
+
         self.options.add_experimental_option(
             "excludeSwitches",
             ["enable-automation"],
@@ -80,8 +103,8 @@ class AvitoParser(IParcer):
         self.options.add_argument(
             "--disable-blink-features=AutomationControlled"
         )
-        self.options.page_load_strategy = "eager"
-        
+
+        # Для запуска без окна браузера можно раскомментировать:
         # self.options.add_argument("--headless=new")
 
         self.object_types: dict[str, ObjectType] = {
@@ -93,19 +116,20 @@ class AvitoParser(IParcer):
             "other": "other",
         }
 
-    def parse(self, parserConfig: ParserConfig) -> tuple[bool, list[SiteParseData] | None]:
+    def parse(self,parserConfig: ParserConfig,) -> tuple[bool, list[SiteParseData] | None]:
         driver = webdriver.Chrome(options=self.options)
         driver.set_page_load_timeout(PAGE_WAIT_TIME)
 
-        offers: list[SiteParseData] = []
-        
         offers: list[SiteParseData] = []
 
         try:
             for category, category_url in self.refs.items():
                 object_type = self.object_types[category]
 
-                for page in range( 1, parserConfig.max_page_iteration + 1,): 
+                for page in range(
+                    1,
+                    parserConfig.max_page_iteration + 1,
+                ):
                     page_url = category_url.format(page=page)
 
                     success, page_offers = self._parsePage(
@@ -121,15 +145,14 @@ class AvitoParser(IParcer):
                         )
 
                         answer = input(
-                            "Откройте страницу в браузере и устраните "
-                            "проблему, затем нажмите Enter для повтора. "
-                            "Введите 'n' для пропуска: "
+                            "Исправьте проблему в браузере и нажмите Enter "
+                            "для повтора. Введите 'n' для пропуска: "
                         ).strip().lower()
 
                         if answer == "n":
                             break
 
-                        page-=1
+                        # Повторяем ту же страницу.
                         continue
 
                     print(
@@ -142,6 +165,7 @@ class AvitoParser(IParcer):
 
                     offers.extend(page_offers)
 
+                    # Пауза между страницами категории.
                     sleep(
                         uniform(
                             parserConfig.min_iteration_time_span,
@@ -152,22 +176,29 @@ class AvitoParser(IParcer):
         finally:
             driver.quit()
 
+        print(f"[=] Avito: добавлено {len(offers)} объявлений")
+
         return True, offers
 
-    def _parsePage(self, driver: webdriver.Chrome, page_url: str, category: ObjectType) -> tuple[bool, list[SiteParseData]]:
+    def _parsePage(
+        self,
+        driver: webdriver.Chrome,
+        page_url: str,
+        category: ObjectType,
+    ) -> tuple[bool, list[SiteParseData]]:
+
         try:
             driver.get(page_url)
 
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, PAGE_WAIT_TIME).until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, '[data-marker="item"]')
                 )
             )
 
-        except TimeoutException:
+        except (TimeoutException, WebDriverException) as error:
+            print(f"[-] Avito: ошибка загрузки списка: {error}")
             return False, []
-
-        # TODO: можно добавить сюда скролл
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
         cards = self._find_cards(soup)
@@ -187,8 +218,9 @@ class AvitoParser(IParcer):
 
             parsed_url = urlparse(item.url)
 
-            if parsed_url.netloc and not parsed_url.netloc.endswith(
-                "avito.ru"
+            if (
+                parsed_url.netloc
+                and not parsed_url.netloc.endswith("avito.ru")
             ):
                 continue
 
@@ -216,31 +248,33 @@ class AvitoParser(IParcer):
 
             item.url = canonical_url
             item.site = "Avito"
-
             results.append(item)
 
-        # Описание и фотографии получаем со страницы каждого объявления.
+        # Подробные характеристики берём со страницы объявления.
         for index, item in enumerate(results, start=1):
             print(
                 f"[Avito] Объявление {index}/{len(results)}: "
                 f"{item.url}"
             )
 
-            description, images, complex_name = self._extract_detail_data(
-                driver,
-                item.url,
-            )
+            detail = self._extract_detail_data(driver, item.url)
 
-            item.description = description
-            item.imgs = images
+            item.description = detail["description"]
+            item.imgs = detail["images"]
+            item.residential_complex = detail["residential_complex"]
 
-            # Если название комплекса найдено на странице объявления,
-            # используем его. Иначе оставляем значение из карточки.
-            if complex_name:
-                item.residential_complex = complex_name
+            property_details = detail["property_details"]
 
-            # Небольшая пауза между объявлениями.
-            sleep(uniform(1, 7))
+            item.rooms_count = property_details["rooms_count"]
+            item.area = property_details["area"]
+            item.floor = property_details["floor"]
+
+            # Адрес со страницы товара имеет приоритет над карточкой.
+            if detail["location"]:
+                item.geo_label = detail["location"]
+
+            # Небольшая пауза, чтобы не создавать лишнюю нагрузку.
+            sleep(uniform(1.5, 5))
 
         return True, results
 
@@ -253,6 +287,7 @@ class AvitoParser(IParcer):
         page_url: str,
         category: ObjectType,
     ) -> SiteParseData | None:
+
         title_element = card.select_one(
             '[data-marker="item-title"]'
         )
@@ -302,11 +337,9 @@ class AvitoParser(IParcer):
 
         name = title_element.get_text(" ", strip=True)
 
-        price_element = card.select_one(
-            '[data-marker="item-price"]'
+        price = self._extract_price(
+            card.select_one('[data-marker="item-price"]')
         )
-
-        price = self._extract_price(price_element)
 
         subtitles_element = (
             card.select_one('[data-marker="item-specific-params"]')
@@ -332,18 +365,22 @@ class AvitoParser(IParcer):
             else ""
         )
 
-        residential_complex = self._extract_residential_complex(card)
-
-        property_details = self._extract_property_details(
-            f"{name} {subtitles}"
-        )
-
         object_type: ObjectType = category
 
-        if category == "flat" and "студи" in name.lower():
+        if category == "flat" and re.search(
+            r"\bстуди",
+            name,
+            re.IGNORECASE,
+        ):
             object_type = "studio"
 
         geo_label = self._extract_geo_labels(location)
+
+        # Значения с карточки — только предварительные.
+        # После открытия объявления они будут заменены данными страницы.
+        property_details = self._extract_property_details(
+            f"{name} {subtitles}"
+        )
 
         return SiteParseData(
             site="Avito",
@@ -354,58 +391,53 @@ class AvitoParser(IParcer):
             price=price,
             object_type=object_type,
             imgs=[],
-            residential_complex=residential_complex,
+            residential_complex="",
             floor=property_details["floor"],
             area=property_details["area"],
             rooms_count=property_details["rooms_count"],
             geo_label=geo_label,
         )
 
-    #
     def _extract_detail_data(
         self,
         driver: webdriver.Chrome,
         url: str,
-    ) -> tuple[str, list[str], str]:
-        """
-        Извлекает со страницы объявления:
-        - описание;
-        - фотографии только из bx_item-gallery;
-        - название из подходящего элемента h4.
+    ) -> dict:
 
-        Не ждёт загрузки всех изображений страницы.
-        """
+        result = {
+            "description": "",
+            "images": [],
+            "residential_complex": "",
+            "location": "",
+            "parameters": {},
+            "property_details": {
+                "area": 0.0,
+                "floor": 0,
+                "rooms_count": "",
+            },
+        }
+
         if not url:
-            return "", [], ""
-
-        description = ""
-        residential_complex = ""
-        images: list[str] = []
-        seen_image_keys: set[str] = set()
+            return result
 
         try:
             try:
                 driver.get(url)
             except TimeoutException:
-                # Если загрузка затянулась, останавливаем её
-                # и пробуем использовать уже полученный HTML.
+                # Продолжаем работу с уже полученным DOM.
                 try:
                     driver.execute_script("window.stop();")
-                except Exception:
+                except WebDriverException:
                     pass
 
-            # Ждём появления галереи не дольше 5 секунд.
-            # Это ожидание нужно только для появления DOM-элемента,
-            # а не для загрузки самих фотографий.
+            # Ждём появления галереи, но не полной загрузки всех фото.
             try:
                 WebDriverWait(driver, PAGE_WAIT_TIME).until(
                     EC.presence_of_element_located(
                         (
                             By.CSS_SELECTOR,
-                            (
-                                "div#bx_item-gallery, "
-                                'div[data-marker="item-view/main-gallery"]'
-                            ),
+                            "div#bx_item-gallery, "
+                            'div[data-marker="item-view/main-gallery"]',
                         )
                     )
                 )
@@ -415,83 +447,80 @@ class AvitoParser(IParcer):
             soup = BeautifulSoup(driver.page_source, "html.parser")
 
             # --------------------------------------------------
-            # 1. Описание объявления
+            # 1. Описание
             # --------------------------------------------------
             description_element = soup.select_one(
                 '[data-marker="item-view/item-description"]'
             )
 
-            if description_element:
-                description = description_element.get_text(
-                    " ",
-                    strip=True,
-                )
-
-            # Резервный вариант, если data-marker изменился.
-            if not description:
+            if description_element is None:
                 description_element = soup.select_one(
                     '[data-marker*="item-description"]'
                 )
 
-                if description_element:
-                    description = description_element.get_text(
-                        " ",
-                        strip=True,
-                    )
-
-            # --------------------------------------------------
-            # 2. Название жилого комплекса или другого объекта
-            # --------------------------------------------------
-            gallery = soup.select_one("div#bx_item-gallery")
-
-            if gallery is None:
-                gallery = soup.select_one(
-                    'div[data-marker="item-view/main-gallery"]'
+            if description_element:
+                result["description"] = description_element.get_text(
+                    " ",
+                    strip=True,
                 )
 
-            # Ищем h4 с указанным стилем.
-            # Классы Avito часто меняются, поэтому не привязываемся
-            # к длинному набору случайных CSS-классов.
-            for heading in soup.select(
-                'h4[style*="--module-max-lines-size"]'
-            ):
-                # Не берём заголовки из самой галереи.
-                if gallery is not None and (
-                    heading is gallery or gallery in heading.parents
-                ):
-                    continue
+            # --------------------------------------------------
+            # 2. Характеристики объявления
+            # --------------------------------------------------
+            parameters = self._extract_detail_parameters(soup)
+            result["parameters"] = parameters
 
-                text = heading.get_text(" ", strip=True)
-
-                if text:
-                    residential_complex = text
-                    break
+            result["property_details"] = self._extract_property_details(
+                soup.get_text(" ", strip=True),
+                parameters,
+            )
 
             # --------------------------------------------------
-            # 3. Фотографии — исключительно из галереи объявления
+            # 3. Название жилого комплекса
             # --------------------------------------------------
+            result["residential_complex"] = (
+                self._extract_residential_complex_from_page(soup)
+            )
+
+            # --------------------------------------------------
+            # 4. Адрес объявления
+            # --------------------------------------------------
+            result["location"] = self._extract_location_from_page(soup)
+
+            # --------------------------------------------------
+            # 5. Фотографии только из галереи
+            # --------------------------------------------------
+            gallery = (
+                soup.select_one("div#bx_item-gallery")
+                or soup.select_one(
+                    'div[data-marker="item-view/main-gallery"]'
+                )
+                or soup.select_one('[data-marker="item-view/gallery"]')
+            )
+
             if gallery is None:
-                return description, [], residential_complex
+                return result
+
+            images: list[str] = []
+            seen_image_keys: set[str] = set()
 
             for image in gallery.select("img"):
-                # Исключаем рекламные блоки ипотеки.
+                if image.find_parent("svg"):
+                    continue
+
+                # Не берём изображения из рекламных/ипотечных блоков.
                 if image.find_parent(
                     attrs={
                         "data-marker": re.compile(
-                            r"mortgage",
+                            r"mortgage|advert",
                             re.IGNORECASE,
                         )
                     }
                 ):
                     continue
 
-                # Пропускаем SVG и логотипы.
-                if image.find_parent("svg"):
-                    continue
-
                 candidates: list[str] = []
 
-                # Обычные URL и атрибуты отложенной загрузки.
                 for attribute in (
                     "src",
                     "data-src",
@@ -504,22 +533,18 @@ class AvitoParser(IParcer):
                     if isinstance(value, str) and value.strip():
                         candidates.append(value.strip())
 
-                # Извлекаем варианты из srcset.
                 for attribute in ("srcset", "data-srcset"):
                     srcset = image.get(attribute)
 
                     if not isinstance(srcset, str):
                         continue
 
-                    # Обычно srcset содержит URL, затем размер:
-                    # https://... 640w, https://... 1280w
                     for entry in srcset.split(","):
                         entry = entry.strip()
 
                         if entry:
                             candidates.append(entry.split()[0])
 
-                # Выбираем первую корректную ссылку.
                 for candidate in candidates:
                     if not candidate or candidate.startswith("data:"):
                         continue
@@ -533,32 +558,28 @@ class AvitoParser(IParcer):
                     if parsed.scheme not in ("http", "https"):
                         continue
 
-                    # Только хосты изображений Avito.
                     if not (
                         host == "img.avito.st"
                         or host.endswith(".img.avito.st")
                     ):
                         continue
 
-                    # Полный путь изображения должен содержать
-                    # идентификатор и второй сегмент после точки.
                     if not re.fullmatch(
                         r"/image/\d+/\d+\.[^/]+\.[^/]+",
                         path,
                     ):
                         continue
 
-                    if path.lower().endswith(".svg"):
-                        continue
-
                     if "placeholder" in path.lower():
                         continue
 
-                    # Убираем дубли с разными query-параметрами.
+                    # Дедупликация без учёта query-параметров.
                     image_key = f"{host}{path}"
 
                     if image_key in seen_image_keys:
                         continue
+
+                    seen_image_keys.add(image_key)
 
                     image_url = urlunparse(
                         (
@@ -571,71 +592,215 @@ class AvitoParser(IParcer):
                         )
                     )
 
-                    seen_image_keys.add(image_key)
                     images.append(image_url)
-
-                    # Переходим к следующему img.
                     break
 
+            result["images"] = images
+
         except Exception as error:
-            print(
-                f"[-] Avito: ошибка обработки {url}: {error}"
+            print(f"[-] Avito: ошибка обработки {url}: {error}")
+
+        return result
+
+    def _extract_detail_parameters(
+        self,
+        soup: BeautifulSoup,
+    ) -> dict[str, str]:
+        """
+        Извлекает параметры вида:
+        «Количество комнат: 1», «Общая площадь: 32.5 м²» и т. д.
+        """
+
+        parameters: dict[str, str] = {}
+
+        for li in soup.select("li"):
+            label_element = li.find("span")
+
+            if label_element is None:
+                continue
+
+            label = label_element.get_text(
+                " ",
+                strip=True,
+            ).rstrip(":").strip()
+
+            if not label:
+                continue
+
+            # Работаем с копией текста: не изменяем исходную страницу.
+            value_parts = []
+
+            for child in li.find_all(
+                recursive=False
+            ):
+                if child is label_element:
+                    continue
+
+                value_parts.append(
+                    child.get_text(" ", strip=True)
+                    if isinstance(child, Tag)
+                    else str(child).strip()
+                )
+
+            # Удаляем из полного текста li название характеристики.
+            full_text = li.get_text(" ", strip=True)
+            label_text = label_element.get_text(" ", strip=True)
+
+            value = full_text.replace(label_text, "", 1)
+            value = re.sub(r"\s+", " ", value).strip(" :\u00a0")
+
+            if value:
+                parameters[label] = value
+
+        return parameters
+
+    def _get_parameter(
+        self,
+        parameters: dict[str, str],
+        *names: str,
+    ) -> str:
+
+        normalized = {
+            re.sub(r"\s+", " ", key).strip().casefold(): value.strip()
+            for key, value in parameters.items()
+        }
+
+        for name in names:
+            key = re.sub(
+                r"\s+",
+                " ",
+                name,
+            ).strip().casefold()
+
+            value = normalized.get(key, "")
+
+            if value:
+                return value
+
+        return ""
+
+    def _extract_property_details(
+        self,
+        text: str,
+        parameters: dict[str, str] | None = None,
+    ) -> dict:
+
+        parameters = parameters or {}
+
+        # --------------------------------------------------
+        # Количество комнат — строка или пустое значение
+        # --------------------------------------------------
+        rooms_count = self._get_parameter(
+            parameters,
+            "Количество комнат",
+            "Комнаты",
+        )
+
+        if rooms_count:
+            match = re.search(
+                r"^\s*(студия|студи[яию]|комната|\d+)",
+                rooms_count,
+                re.IGNORECASE,
             )
 
-        return description, images, residential_complex
-    #
+            if match:
+                rooms_count = match.group(1).strip().lower()
 
-    def _extract_price(self, price_element: Tag | None) -> int:
-        if price_element is None:
-            return 0
+                if rooms_count.startswith("студи"):
+                    rooms_count = "студия"
+            else:
+                rooms_count = rooms_count.strip()
+        else:
+            match = re.search(
+                r"количество комнат\s*:\s*(студия|\d+)",
+                text,
+                re.IGNORECASE,
+            )
 
-        price_text = price_element.get_text(" ", strip=True)
-        digits = re.sub(r"\D", "", price_text)
+            if match:
+                rooms_count = match.group(1).strip().lower()
+            else:
+                match = re.search(
+                    r"(\d+)\s*[-–]?\s*комн(?:ат(?:а|ы)?)?\.?",
+                    text,
+                    re.IGNORECASE,
+                )
 
-        return int(digits) if digits else 0
+                if match:
+                    rooms_count = match.group(1)
+                elif re.search(
+                    r"\bстуди[яию]\b",
+                    text,
+                    re.IGNORECASE,
+                ):
+                    rooms_count = "студия"
+                else:
+                    rooms_count = ""
 
-    def _extract_property_details(self, text: str) -> dict:
-        area = 0.0
-        floor = 0
-        rooms_count = 0
+        # --------------------------------------------------
+        # Площадь — в первую очередь из «Общая площадь»
+        # --------------------------------------------------
+        area_text = self._get_parameter(
+            parameters,
+            "Общая площадь",
+            "Площадь",
+        )
 
         area_match = re.search(
-            r"(\d+(?:[.,]\d+)?)\s*(?:м²|м2|кв\.?\s*м)",
-            text,
-            re.IGNORECASE,
+            r"(\d+(?:[.,]\d+)?)",
+            area_text,
         )
 
         if area_match:
-            area = float(area_match.group(1).replace(",", "."))
+            area = float(
+                area_match.group(1).replace(",", ".")
+            )
+        else:
+            area_match = re.search(
+                r"(\d+(?:[.,]\d+)?)\s*(?:м²|м2|кв\.?\s*м)",
+                text,
+                re.IGNORECASE,
+            )
+
+            area = (
+                float(area_match.group(1).replace(",", "."))
+                if area_match
+                else 0.0
+            )
+
+        # --------------------------------------------------
+        # Этаж — значение вида «2 из 9»
+        # --------------------------------------------------
+        floor_text = self._get_parameter(
+            parameters,
+            "Этаж",
+        )
 
         floor_match = re.search(
-            r"(\d+)\s*/\s*(\d+)\s*(?:эт\.?|этаж)",
-            text,
+            r"^\s*(\d+)\s*(?:из\s+\d+)?",
+            floor_text,
             re.IGNORECASE,
         )
 
-        if floor_match:
-            floor = int(floor_match.group(1))
-        else:
+        if not floor_match:
+            floor_match = re.search(
+                r"(\d+)\s*/\s*\d+\s*(?:эт\.?|этаж)",
+                text,
+                re.IGNORECASE,
+            )
+
+        if not floor_match:
             floor_match = re.search(
                 r"(\d+)\s*(?:эт\.?|этаж)",
                 text,
                 re.IGNORECASE,
             )
 
-            if floor_match:
-                floor = int(floor_match.group(1))
-
-        rooms_match = re.search(
-            r"(\d+)\s*[-–]?\s*(?:комн\.?|комнат)",
-            text,
-            re.IGNORECASE,
+        floor = (
+            int(floor_match.group(1))
+            if floor_match
+            else 0
         )
-
-        if rooms_match:
-            rooms_count = int(rooms_match.group(1))
-        elif re.search(r"\bстуди", text, re.IGNORECASE):
-            rooms_count = 1
 
         return {
             "area": area,
@@ -643,129 +808,144 @@ class AvitoParser(IParcer):
             "rooms_count": rooms_count,
         }
 
-    def _extract_residential_complex(self, card: Tag) -> str:
-        element = (
-            card.select_one('[data-marker="item-residential-complex"]')
-            or card.select_one('[data-marker="item-complex-name"]')
+    def _extract_residential_complex_from_page(
+        self,
+        soup: BeautifulSoup,
+    ) -> str:
+
+        selectors = [
+            '[data-marker="item-view/residential-complex"]',
+            '[data-marker="item-residential-complex"]',
+            '[data-marker="item-complex-name"]',
+        ]
+
+        for selector in selectors:
+            element = soup.select_one(selector)
+
+            if element:
+                value = element.get_text(" ", strip=True)
+
+                if value and self._looks_like_complex_name(value):
+                    return value
+
+        # Резервный вариант: только заголовки, явно похожие на название ЖК.
+        for heading in soup.select(
+            'h4[style*="--module-max-lines-size"]'
+        ):
+            value = heading.get_text(" ", strip=True)
+
+            if self._looks_like_complex_name(value):
+                return value
+
+        return ""
+
+    def _looks_like_complex_name(self, value: str) -> bool:
+        if not value:
+            return False
+
+        # Название должно явно обозначать жилой комплекс.
+        if not re.match(
+            r"^(?:ЖК\b|жилой комплекс\b)",
+            value,
+            re.IGNORECASE,
+        ):
+            return False
+
+        # Исключаем рекламные фразы и заголовки других блоков.
+        excluded = (
+            "скидка",
+            "трейд-ин",
+            "ипотека",
+            "выгода",
+            "лёгкий старт",
+            "легкий старт",
+            "о доме",
+            "условия продажи",
         )
 
-        return (
-            element.get_text(" ", strip=True)
-            if element
-            else ""
+        return not any(
+            phrase in value.casefold()
+            for phrase in excluded
         )
 
-    def _extract_geo_labels(self, location: str) -> geoLabelDict:
-        geo_label: geoLabelDict = {
-            "region": "Приморский край",
-            "city": "Владивосток",
+    def _extract_price(self, price_element: Tag | None) -> int:
+        """Извлекает числовую цену из элемента карточки объявления."""
+        if price_element is None:
+            return 0
+        price_text = price_element.get_text(" ", strip=True)
+        digits = re.sub(r"\D", "", price_text)
+        return int(digits) if digits else 0
+
+    def _extract_geo_labels(self, location: str = "") -> geoLabelDict:
+        """Возвращает пустые поля географии до получения адреса через DaData.
+
+        Текстовый адрес Avito намеренно не разбирается: адресные поля
+        заполняются только по координатам с карты объявления.
+        """
+        return {
+            "region": "",
+            "city": "",
             "district": "",
             "micro_district": "",
             "street": "",
             "house": "",
         }
 
-        if not location:
-            return geo_label
-
-        parts = [
-            part.strip()
-            for part in re.split(r"[,;]", location)
-            if part.strip()
-        ]
-
-        house_pattern = re.compile(
-            r"^(?:д\.?|дом|стр\.?|строение|корп\.?|корпус)\s*"
-            r"([\w/-]+)",
-            re.IGNORECASE,
+#
+    def _extract_location_from_page(self,  soup: BeautifulSoup,) -> geoLabelDict | None:
+        """
+        Получает координаты из data-map-lat/data-map-lon
+        и определяет адрес через библиотеку DaData.
+        """
+        map_element = soup.select_one(
+            '[data-marker="item-map-wrapper"][data-map-lat][data-map-lon]'
         )
 
-        street_pattern = re.compile(
-            r"^(?:ул\.?|улица|пр-т|проспект|пер\.?|переулок|"
-            r"ш\.?|шоссе|наб\.?|набережная)\s*.+",
-            re.IGNORECASE,
-        )
+        if map_element is None:
+            return None
 
-        for part in parts:
-            if re.search(
-                r"владивосток",
-                part,
-                re.IGNORECASE,
-            ):
-                geo_label["city"] = "Владивосток"
-                continue
+        
+        lat_value = map_element.get("data-map-lat")
+        lon_value = map_element.get("data-map-lon")
 
-            if re.search(
-                r"приморский край",
-                part,
-                re.IGNORECASE,
-            ):
-                geo_label["region"] = "Приморский край"
-                continue
+        if not isinstance(lat_value, str) or not isinstance(lon_value, str):
+            print("[-] Avito: не удалось прочитать координаты объявления")
+            return None
 
-            house_match = house_pattern.match(part)
+        try:
+            lat = float(lat_value)
+            lon = float(lon_value)
+        except ValueError:
+            print("[-] Avito: некорректный формат координат")
+            return None
+        
 
-            if house_match:
-                geo_label["house"] = house_match.group(1)
-                continue
+        try:
+            result = self.dadata.geolocate(
+                name="address",
+                lat=lat,
+                lon=lon,
+            )
+        except Exception as error:
+            print(f"[-] DaData: ошибка получения адреса: {error}")
+            return None
 
-            if street_pattern.match(part):
-                street_match = re.search(
-                    r"^(?:ул\.?|улица|пр-т|проспект|пер\.?|переулок|"
-                    r"ш\.?|шоссе|наб\.?|набережная)\s*(.+)$",
-                    part,
-                    re.IGNORECASE,
-                )
+        if not result:
+            print(
+                f"[-] DaData: адрес не найден "
+                f"для координат {lat}, {lon}"
+            )
+            return None
 
-                if street_match:
-                    street_value = street_match.group(1).strip()
-                    number_match = re.search(
-                        r",?\s*(?:д\.?|дом)?\s*(\d+[\w/-]*)$",
-                        street_value,
-                        re.IGNORECASE,
-                    )
+        # Библиотека возвращает список подсказок с полем data.
+        address = result[0].get("data", {})
 
-                    if number_match:
-                        geo_label["house"] = number_match.group(1)
-                        street_value = street_value[
-                            :number_match.start()
-                        ].strip(" ,")
-
-                    geo_label["street"] = street_value
-
-                continue
-
-            if re.search(
-                r"район|р-н",
-                part,
-                re.IGNORECASE,
-            ):
-                geo_label["district"] = part
-                continue
-
-            if re.search(
-                r"микрорайон|мкр\.?",
-                part,
-                re.IGNORECASE,
-            ):
-                geo_label["micro_district"] = part
-                continue
-
-            if not geo_label["street"]:
-                number_match = re.search(
-                    r",?\s*(?:д\.?|дом)?\s*(\d+[\w/-]*)$",
-                    part,
-                    re.IGNORECASE,
-                )
-
-                if number_match and re.search(
-                    r"[а-яё]",
-                    part,
-                    re.IGNORECASE,
-                ):
-                    geo_label["house"] = number_match.group(1)
-                    geo_label["street"] = part[
-                        :number_match.start()
-                    ].strip(" ,")
-
-        return geo_label
+        return {
+            "region": address.get("region", "") or "",
+            "city": address.get("city", "") or "",
+            "district": address.get("city_district", "") or "",
+            "micro_district": address.get("settlement", "") or "",
+            "street": address.get("street", "") or "",
+            "house": address.get("house", "") or "",
+        }
+#
