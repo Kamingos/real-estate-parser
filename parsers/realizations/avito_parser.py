@@ -1,10 +1,11 @@
+
 import re
 import webbrowser
 
 from time import sleep
 from random import uniform
-
 from typing import Literal, TypeAlias
+from urllib.parse import urljoin
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -30,10 +31,12 @@ refs = {
     "other": "https://www.avito.ru/vladivostok/kommercheskaya_nedvizhimost/prodam-ASgBAgICAUSwCNJW?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Imo2SnJ2d0hOZElKdnNOMlkiO31-kt2FJgAAAA&f=ASgBAgICAkSwCNJW8hKg2gE&localPriority=0&p={page}"
 }
 
+
 ObjectType: TypeAlias = Literal[
     "flat", "room", "studio", "house",
     "land_plot", "garage", "other"
 ]
+
 
 class AvitoParser(IParcer):
 
@@ -41,14 +44,17 @@ class AvitoParser(IParcer):
         super().__init__()
 
         self.options = Options()
-        # Отключает флаг enable-automation в настройках браузера
-        self.options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        # Отключает автоматическое расширение Selenium
-        self.options.add_experimental_option('useAutomationExtension', False)
-        # Отключает специальный флаг Blink, помечающий браузер как управляемый
-        self.options.add_argument("--disable-blink-features=AutomationControlled")
+        self.options.add_experimental_option(
+            "excludeSwitches", ["enable-automation"]
+        )
+        self.options.add_experimental_option(
+            "useAutomationExtension", False
+        )
+        self.options.add_argument(
+            "--disable-blink-features=AutomationControlled"
+        )
 
-        # Если нужно, можно включить фоновый режим.
+        # Для фонового режима раскомментируй следующую строку.
         # self.options.add_argument("--headless=new")
 
         self.object_types: dict[str, ObjectType] = {
@@ -70,34 +76,30 @@ class AvitoParser(IParcer):
 
         try:
             for category, url_template in refs.items():
-
-                for page in range(1, parserConfig.max_page_iteration + 1):
+                for page in range(
+                    1, parserConfig.max_page_iteration + 1
+                ):
                     page_url = url_template.format(page=page)
 
                     success, result = self._parsePage(
-                        driver,
-                        page_url,
-                        category
+                        driver, page_url, category
                     )
 
                     if not success or result is None:
                         print(
-                            f"[-] Avito: не удалось получить "
-                            f"страницу {page}, категория {category}"
+                            f"[-] Avito: не удалось получить страницу "
+                            f"{page}, категория {category}"
                         )
 
                         answer = input(
-                            "Проверить страницу в браузере "
-                            "и попробовать снова? [y/n]: "
-                        ).lower()
+                            "Проверить страницу и повторить? [y/n]: "
+                        ).strip().lower()
 
                         if answer == "y":
                             webbrowser.open_new_tab(page_url)
                             input("После проверки нажмите Enter...")
                             success, result = self._parsePage(
-                                driver,
-                                page_url,
-                                category
+                                driver, page_url, category
                             )
 
                         if not success or result is None:
@@ -110,7 +112,7 @@ class AvitoParser(IParcer):
                         f"категория={category}, страница={page}"
                     )
 
-                    if len(result) == 0:
+                    if not result:
                         break
 
                     if page < parserConfig.max_page_iteration:
@@ -119,7 +121,9 @@ class AvitoParser(IParcer):
                             parserConfig.max_iteration_time_span
                         ))
 
-            print(f"[+] Avito: всего собрано {len(offers_list)} объявлений")
+            print(
+                f"[+] Avito: всего собрано {len(offers_list)} объявлений"
+            )
             return True, offers_list
 
         except Exception as error:
@@ -146,49 +150,38 @@ class AvitoParser(IParcer):
             )
 
         except TimeoutException:
-            print("[-] Avito: карточки не загрузились или изменилась разметка")
+            print(
+                "[-] Avito: карточки не загрузились "
+                "или изменилась разметка"
+            )
             return False, None
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
-
         cards = self._find_cards(soup)
-        results: list[SiteParseData] = []
-
-        #
-        for card in cards:
-            item = self._extract_card_data(card, page_url, category)
-
-            location_element = (
-                card.select_one('[data-marker="item-address"]')
-                or card.select_one('[data-marker="item-location"]')
-            )
-
-            location_text = (
-                location_element.get_text(" ", strip=True)
-                if location_element
-                else ""
-            ).lower()
-
-            # Пропускаем объявления только при явно указанном другом городе.
-            if location_text:
-                first_part = location_text.split(",")[0].strip()
-
-                if first_part.startswith("г. ") and "владивосток" not in first_part:
-                    continue
-
-            item.site = "Avito"
-            results.append(item)
-        #
 
         if not cards:
             return False, None
 
+        results: list[SiteParseData] = []
+
+        for card in cards:
+            item = self._extract_card_data(
+                card, page_url, category
+            )
+
+            # Не отбрасываем объявления, если город не указан.
+            # Исключаем только явно распознанный другой город.
+            location = self._get_location_text(card)
+
+            if self._is_other_city(location):
+                continue
+
+            results.append(item)
+
         return True, results
 
     def _find_cards(self, soup: BeautifulSoup) -> list[Tag]:
-        return list(
-            soup.select('[data-marker="item"]')
-        )
+        return list(soup.select('[data-marker="item"]'))
 
     def _extract_card_data(
         self,
@@ -198,58 +191,40 @@ class AvitoParser(IParcer):
     ) -> SiteParseData:
 
         title = card.select_one('[data-marker="item-title"]')
+        name = title.get_text(" ", strip=True) if title else ""
 
-        #
-        link = None
+        link: Tag | None = None
 
         if isinstance(title, Tag):
             if title.name == "a" and title.get("href"):
                 link = title
             else:
-                link = title.find_parent("a", href=True)
+                parent_link = title.find_parent("a", href=True)
+                if isinstance(parent_link, Tag):
+                    link = parent_link
 
-        if not isinstance(link, Tag):
-            link = card.select_one("a[data-marker='item-title'][href]")
+        if link is None:
+            candidate = card.select_one("a[href]")
+            if isinstance(candidate, Tag):
+                link = candidate
 
-        url = page_url
-
-        if isinstance(link, Tag):
-            href = link.get("href", "")
-
-            if isinstance(href, str) and href:
-                url = (
-                    "https://www.avito.ru" + href
-                    if href.startswith("/")
-                    else href
-                )
-        #
-
-        name = title.get_text(" ", strip=True) if title else ""
+        href = link.get("href", "") if link else ""
+        url = urljoin("https://www.avito.ru", str(href)) if href else page_url
 
         price_element = card.select_one('[data-marker="item-price"]')
         price = self._extract_price(price_element)
 
-        description_element = card.select_one(
-            '[data-marker="item-description"]'
+        description_element = (
+            card.select_one('[data-marker="item-description"]')
+            or card.select_one('[data-marker="item-specific-params"]')
         )
 
         description = (
             description_element.get_text(" ", strip=True)
-            if description_element
-            else ""
+            if description_element else ""
         )
 
-        location_element = (
-            card.select_one('[data-marker="item-address"]')
-            or card.select_one('[data-marker="item-location"]')
-        )
-
-        location_text = (
-            location_element.get_text(" ", strip=True)
-            if location_element
-            else ""
-        )
-
+        location_text = self._get_location_text(card)
         images = self._extract_card_images(card)
 
         floor, area, rooms_count = self._extract_property_details(name)
@@ -258,17 +233,74 @@ class AvitoParser(IParcer):
             site="Avito",
             url=url,
             name=name,
-            subtitles="",
+            subtitles=self._extract_subtitles(card, title),
             description=description,
             price=price,
             object_type=self.object_types[category],
             imgs=images,
-            residential_complex="",
+            residential_complex=self._extract_residential_complex(card),
             floor=floor,
             area=area,
             rooms_count=rooms_count,
             geo_label=self._extract_geo_labels(location_text)
         )
+
+    def _get_location_text(self, card: Tag) -> str:
+        selectors = (
+            '[data-marker="item-address"]',
+            '[data-marker="item-location"]',
+        )
+
+        for selector in selectors:
+            element = card.select_one(selector)
+            if element:
+                return element.get_text(" ", strip=True)
+
+        return ""
+
+    def _is_other_city(self, location: str) -> bool:
+        if not location:
+            return False
+
+        text = location.lower()
+
+        # Для Владивостока оставляем объявления.
+        if "владивосток" in text:
+            return False
+
+        # Исключаем карточку только при явном указании другого города.
+        first_part = text.split(",")[0].strip()
+        return first_part.startswith("г. ")
+
+    def _extract_subtitles(
+        self,
+        card: Tag,
+        title: Tag | None
+    ) -> str:
+        # Извлекаем доступные параметры карточки, если они присутствуют.
+        element = card.select_one(
+            '[data-marker="item-specific-params"]'
+        )
+
+        if element:
+            text = element.get_text(" ", strip=True)
+            if text:
+                return text
+
+        return ""
+
+    def _extract_residential_complex(self, card: Tag) -> str:
+        # Название ЖК может отсутствовать в карточке каталога.
+        for link in card.select("a[href]"):
+            text = link.get_text(" ", strip=True)
+
+            if text and (
+                "жилой комплекс" in text.lower()
+                or text.lower().startswith("жк ")
+            ):
+                return text
+
+        return ""
 
     def _extract_card_images(self, card: Tag) -> list[str]:
         result: list[str] = []
@@ -276,8 +308,13 @@ class AvitoParser(IParcer):
         for image in card.select("img"):
             src = image.get("src") or image.get("data-src")
 
-            if isinstance(src, str) and src.startswith("http"):
-                result.append(src)
+            if not isinstance(src, str) or not src.startswith("http"):
+                continue
+
+            if "stub_avatars" in src.lower():
+                continue
+
+            result.append(src)
 
         return list(dict.fromkeys(result))
 
@@ -303,7 +340,7 @@ class AvitoParser(IParcer):
         rooms_count = 0
 
         area_match = re.search(
-            r"(\d+(?:[.,]\d+)?)\s*м²",
+            r"(\d+(?:[.,]\d+)?)\s*м(?:²|2|<sup>2</sup>)?",
             name,
             re.IGNORECASE
         )
@@ -321,7 +358,8 @@ class AvitoParser(IParcer):
             floor = int(floor_match.group(1))
 
         rooms_match = re.search(
-            r"\b(\d+)\s*[-‑–]?\s*(?:к(?:\.|\b)|комн\.?|комнатн\w*)",
+            r"\b(\d+)\s*[-‑–]?\s*"
+            r"(?:к(?:\.|\b)|комн\.?|комнатн\w*)",
             name,
             re.IGNORECASE
         )
@@ -344,23 +382,42 @@ class AvitoParser(IParcer):
         if not location:
             return geo_data
 
-        parts = [
-            part.strip()
-            for part in location.split(",")
-            if part.strip()
-        ]
+        text = location.strip()
+        lower_text = text.lower()
 
-        for part in parts:
-            if "приморский край" in part.lower():
-                geo_data["region"] = part
+        if "приморский край" in lower_text:
+            geo_data["region"] = "Приморский край"
 
-            elif "владивосток" in part.lower():
-                geo_data["city"] = part
+        if "владивосток" in lower_text:
+            geo_data["city"] = "Владивосток"
 
-        if len(parts) > 1:
-            last_part = parts[-1]
+        district_match = re.search(
+            r"р-н\s*([^,]+)",
+            text,
+            re.IGNORECASE
+        )
 
-            if re.search(r"\d", last_part):
-                geo_data["house"] = last_part
+        if district_match:
+            geo_data["district"] = district_match.group(1).strip()
 
+        street_match = re.search(
+            r"((?:ул\.?|улица|пр-т|проспект|пер\.?|переулок|"
+            r"ш\.?|шоссе)\s*[^,]+)",
+            text,
+            re.IGNORECASE
+        )
+
+        if street_match:
+            geo_data["street"] = street_match.group(1).strip()
+
+        house_match = re.search(
+            r"(?:д\.?|дом)\s*([\w/-]+)",
+            text,
+            re.IGNORECASE
+        )
+
+        if house_match:
+            geo_data["house"] = house_match.group(1).strip()
+
+        # Не записываем весь адрес в house, если номер дома не найден.
         return geo_data
