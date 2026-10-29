@@ -1,18 +1,17 @@
-
 import re
 import webbrowser
 
 from time import sleep
 from random import uniform
 from typing import Literal, TypeAlias
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -28,13 +27,18 @@ refs = {
     "house": "https://www.avito.ru/vladivostok/doma_dachi_kottedzhi/prodam-ASgBAgICAUSUA9AQ?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6ImdBbjNKTGlKeGxEWDVKbngiO3367d43JgAAAA&localPriority=0&p={page}",
     "land_plot": "https://www.avito.ru/vladivostok/zemelnye_uchastki/prodam-ASgBAgICAUSWA9oQ?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6InNhQTVsSjhmV1pTZEo1aE8iO300GHrYJgAAAA&localPriority=0&p={page}",
     "garage": "https://www.avito.ru/vladivostok/garazhi_i_mashinomesta/prodam-ASgBAgICAUSYA~QQ?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6ImgyMXNNQ2VWQkxaNlQ0YkciO33mvNP-JgAAAA&localPriority=0&p={page}",
-    "other": "https://www.avito.ru/vladivostok/kommercheskaya_nedvizhimost/prodam-ASgBAgICAUSwCNJW?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Imo2SnJ2d0hOZElKdnNOMlkiO31-kt2FJgAAAA&f=ASgBAgICAkSwCNJW8hKg2gE&localPriority=0&p={page}"
+    "other": "https://www.avito.ru/vladivostok/kommercheskaya_nedvizhimost/prodam-ASgBAgICAUSwCNJW?context=H4sIAAAAAAAA_wEmANn_YToxOntzOjE6InkiO3M6MTY6Imo2SnJ2d0hOZElKdnNOMlkiO31-kt2FJgAAAA&f=ASgBAgICAkSwCNJW8hKg2gE&localPriority=0&p={page}",
 }
 
 
 ObjectType: TypeAlias = Literal[
-    "flat", "room", "studio", "house",
-    "land_plot", "garage", "other"
+    "flat",
+    "room",
+    "studio",
+    "house",
+    "land_plot",
+    "garage",
+    "other",
 ]
 
 
@@ -63,32 +67,38 @@ class AvitoParser(IParcer):
             "house": "house",
             "land_plot": "land_plot",
             "garage": "garage",
-            "other": "other"
+            "other": "other",
         }
 
     def parse(
         self,
-        parserConfig: ParserConfig
+        parserConfig: ParserConfig,
     ) -> tuple[bool, list[SiteParseData] | None]:
 
         offers_list: list[SiteParseData] = []
-        driver = webdriver.Chrome(options=self.options)
+        seen_urls: set[str] = set()
+
+        try:
+            driver = webdriver.Chrome(options=self.options)
+        except WebDriverException as error:
+            print(f"[-] Avito: не удалось запустить Chrome: {error}")
+            return False, None
 
         try:
             for category, url_template in refs.items():
-                for page in range(
-                    1, parserConfig.max_page_iteration + 1
-                ):
+                for page in range(1, parserConfig.max_page_iteration + 1):
                     page_url = url_template.format(page=page)
 
                     success, result = self._parsePage(
-                        driver, page_url, category
+                        driver,
+                        page_url,
+                        category,
                     )
 
                     if not success or result is None:
                         print(
                             f"[-] Avito: не удалось получить страницу "
-                            f"{page}, категория {category}"
+                            f"{page}, категория={category}"
                         )
 
                         answer = input(
@@ -98,17 +108,28 @@ class AvitoParser(IParcer):
                         if answer == "y":
                             webbrowser.open_new_tab(page_url)
                             input("После проверки нажмите Enter...")
+
                             success, result = self._parsePage(
-                                driver, page_url, category
+                                driver,
+                                page_url,
+                                category,
                             )
 
                         if not success or result is None:
                             break
 
-                    offers_list.extend(result)
+                    added_count = 0
+
+                    for item in result:
+                        if not item.url or item.url in seen_urls:
+                            continue
+
+                        seen_urls.add(item.url)
+                        offers_list.append(item)
+                        added_count += 1
 
                     print(
-                        f"[+] Avito: добавлено {len(result)} объявлений; "
+                        f"[+] Avito: добавлено {added_count} объявлений; "
                         f"категория={category}, страница={page}"
                     )
 
@@ -116,10 +137,12 @@ class AvitoParser(IParcer):
                         break
 
                     if page < parserConfig.max_page_iteration:
-                        sleep(uniform(
-                            parserConfig.min_iteration_time_span,
-                            parserConfig.max_iteration_time_span
-                        ))
+                        sleep(
+                            uniform(
+                                parserConfig.min_iteration_time_span,
+                                parserConfig.max_iteration_time_span,
+                            )
+                        )
 
             print(
                 f"[+] Avito: всего собрано {len(offers_list)} объявлений"
@@ -137,7 +160,7 @@ class AvitoParser(IParcer):
         self,
         driver: webdriver.Chrome,
         page_url: str,
-        category: str
+        category: str,
     ) -> tuple[bool, list[SiteParseData] | None]:
 
         try:
@@ -151,26 +174,30 @@ class AvitoParser(IParcer):
 
         except TimeoutException:
             print(
-                "[-] Avito: карточки не загрузились "
-                "или изменилась разметка"
+                "[-] Avito: карточки не загрузились. "
+                "Возможны CAPTCHA, пустая выдача или изменение разметки."
             )
+            return False, None
+
+        except WebDriverException as error:
+            print(f"[-] Avito: ошибка загрузки страницы: {error}")
             return False, None
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
         cards = self._find_cards(soup)
 
         if not cards:
+            print("[-] Avito: карточки не найдены")
             return False, None
 
         results: list[SiteParseData] = []
 
         for card in cards:
-            item = self._extract_card_data(
-                card, page_url, category
-            )
+            item = self._extract_card_data(card, page_url, category)
 
-            # Не отбрасываем объявления, если город не указан.
-            # Исключаем только явно распознанный другой город.
+            if not item.url:
+                continue
+
             location = self._get_location_text(card)
 
             if self._is_other_city(location):
@@ -187,11 +214,55 @@ class AvitoParser(IParcer):
         self,
         card: Tag,
         page_url: str,
-        category: str
+        category: str,
     ) -> SiteParseData:
 
         title = card.select_one('[data-marker="item-title"]')
         name = title.get_text(" ", strip=True) if title else ""
+
+        # Получаем ссылку непосредственно из карточки.
+        url = self._extract_url(card, page_url)
+
+        price_element = card.select_one('[data-marker="item-price"]')
+        price = self._extract_price(price_element)
+
+        description = self._extract_description(card)
+        subtitles = self._extract_subtitles(card, title)
+        location_text = self._get_location_text(card)
+        images = self._extract_card_images(card)
+
+        floor, area, rooms_count = self._extract_property_details(name)
+
+        object_type = self.object_types[category]
+
+        # Студия определяется по заголовку.
+        if re.search(r"\bстуди[яиюи]\b", name, re.IGNORECASE):
+            object_type = "studio"
+
+        return SiteParseData(
+            site="Avito",
+            url=url,
+            name=name,
+            subtitles=subtitles,
+            description=description,
+            price=price,
+            object_type=object_type,
+            imgs=images,
+            residential_complex=self._extract_residential_complex(card),
+            floor=floor,
+            area=area,
+            rooms_count=rooms_count,
+            geo_label=self._extract_geo_labels(location_text),
+        )
+
+    def _extract_url(self, card: Tag, page_url: str) -> str:
+        """
+        Avito использует ссылки вида:
+        /vladivostok/kvartiry/kvartira-studiya_..._8374551255
+        Поэтому нельзя проверять только наличие /obyavlenie/.
+        """
+
+        title = card.select_one('[data-marker="item-title"]')
 
         link: Tag | None = None
 
@@ -204,46 +275,35 @@ class AvitoParser(IParcer):
                     link = parent_link
 
         if link is None:
-            candidate = card.select_one("a[href]")
-            if isinstance(candidate, Tag):
-                link = candidate
+            link = card.select_one('a[data-marker="item-title"]')
 
-        href = link.get("href", "") if link else ""
-        url = urljoin("https://www.avito.ru", str(href)) if href else page_url
+        if link is None:
+            return ""
 
-        price_element = card.select_one('[data-marker="item-price"]')
-        price = self._extract_price(price_element)
+        href = link.get("href")
 
-        description_element = (
-            card.select_one('[data-marker="item-description"]')
-            or card.select_one('[data-marker="item-specific-params"]')
-        )
+        if not isinstance(href, str) or not href.strip():
+            return ""
 
-        description = (
-            description_element.get_text(" ", strip=True)
-            if description_element else ""
-        )
+        url = urljoin(page_url, href.strip())
+        parsed_url = urlparse(url)
 
-        location_text = self._get_location_text(card)
-        images = self._extract_card_images(card)
+        if parsed_url.netloc.lower() not in {
+            "avito.ru",
+            "www.avito.ru",
+        }:
+            return ""
 
-        floor, area, rooms_count = self._extract_property_details(name)
+        path = parsed_url.path.rstrip("/")
+        last_segment = path.split("/")[-1]
 
-        return SiteParseData(
-            site="Avito",
-            url=url,
-            name=name,
-            subtitles=self._extract_subtitles(card, title),
-            description=description,
-            price=price,
-            object_type=self.object_types[category],
-            imgs=images,
-            residential_complex=self._extract_residential_complex(card),
-            floor=floor,
-            area=area,
-            rooms_count=rooms_count,
-            geo_label=self._extract_geo_labels(location_text)
-        )
+        # У объявления Avito в конце URL обычно находится числовой ID.
+        if not re.search(r"_\d{7,}$", last_segment):
+            return ""
+
+        # Удаляем параметры запроса, чтобы одна ссылка не считалась
+        # разными объявлениями из-за context и других параметров.
+        return f"https://www.avito.ru{path}"
 
     def _get_location_text(self, card: Tag) -> str:
         selectors = (
@@ -253,8 +313,12 @@ class AvitoParser(IParcer):
 
         for selector in selectors:
             element = card.select_one(selector)
+
             if element:
-                return element.get_text(" ", strip=True)
+                text = element.get_text(" ", strip=True)
+
+                if text:
+                    return text
 
         return ""
 
@@ -264,40 +328,69 @@ class AvitoParser(IParcer):
 
         text = location.lower()
 
-        # Для Владивостока оставляем объявления.
         if "владивосток" in text:
             return False
 
-        # Исключаем карточку только при явном указании другого города.
         first_part = text.split(",")[0].strip()
-        return first_part.startswith("г. ")
+
+        return bool(
+            re.match(
+                r"^(?:г\.?\s+|город\s+)",
+                first_part,
+                re.IGNORECASE,
+            )
+        )
+
+    def _extract_description(self, card: Tag) -> str:
+        element = card.select_one('[data-marker="item-description"]')
+
+        if element:
+            return element.get_text(" ", strip=True)
+
+        return ""
 
     def _extract_subtitles(
         self,
         card: Tag,
-        title: Tag | None
+        title: Tag | None,
     ) -> str:
-        # Извлекаем доступные параметры карточки, если они присутствуют.
+
         element = card.select_one(
             '[data-marker="item-specific-params"]'
         )
 
-        if element:
-            text = element.get_text(" ", strip=True)
-            if text:
-                return text
+        if not element:
+            return ""
 
-        return ""
+        text = element.get_text(" ", strip=True)
+
+        if title:
+            title_text = title.get_text(" ", strip=True)
+
+            if text == title_text:
+                return ""
+
+        return text
 
     def _extract_residential_complex(self, card: Tag) -> str:
-        # Название ЖК может отсутствовать в карточке каталога.
         for link in card.select("a[href]"):
             text = link.get_text(" ", strip=True)
 
-            if text and (
-                "жилой комплекс" in text.lower()
-                or text.lower().startswith("жк ")
+            if not text:
+                continue
+
+            if re.search(
+                r"^(?:жк\s*[«\"']?|жилой комплекс\s*[«\"']?)",
+                text,
+                re.IGNORECASE,
             ):
+                text = re.split(
+                    r"\s*[·•]\s*(?:\d+[,.]?\d*|отзыв)",
+                    text,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip()
+
                 return text
 
         return ""
@@ -306,33 +399,70 @@ class AvitoParser(IParcer):
         result: list[str] = []
 
         for image in card.select("img"):
-            src = image.get("src") or image.get("data-src")
+            candidates = [
+                image.get("src"),
+                image.get("data-src"),
+                image.get("data-original"),
+            ]
 
-            if not isinstance(src, str) or not src.startswith("http"):
-                continue
+            srcset = image.get("srcset") or image.get("data-srcset")
 
-            if "stub_avatars" in src.lower():
-                continue
+            if isinstance(srcset, str):
+                candidates.extend(
+                    part.strip().split(" ")[0]
+                    for part in srcset.split(",")
+                    if part.strip()
+                )
 
-            result.append(src)
+            for src in candidates:
+                if not isinstance(src, str):
+                    continue
 
-        return list(dict.fromkeys(result))
+                src = src.strip()
+
+                if src.startswith("//"):
+                    src = f"https:{src}"
+
+                if not src.startswith("https://"):
+                    continue
+
+                if any(
+                    marker in src.lower()
+                    for marker in (
+                        "stub_avatars",
+                        "avatar",
+                        "logo",
+                    )
+                ):
+                    continue
+
+                if src not in result:
+                    result.append(src)
+
+        return result
 
     def _extract_price(self, price_element: Tag | None) -> int:
         if price_element is None:
             return 0
 
-        digits = "".join(
-            char
-            for char in price_element.get_text(" ", strip=True)
-            if char.isdigit()
+        text = price_element.get_text(" ", strip=True)
+
+        match = re.search(
+            r"(\d[\d\s\u00a0]*)\s*(?:₽|руб\.?|р\.)",
+            text,
+            re.IGNORECASE,
         )
 
+        if match:
+            digits = re.sub(r"\D", "", match.group(1))
+            return int(digits) if digits else 0
+
+        digits = re.sub(r"\D", "", text)
         return int(digits) if digits else 0
 
     def _extract_property_details(
         self,
-        name: str
+        name: str,
     ) -> tuple[int, float, int]:
 
         floor = 0
@@ -340,18 +470,18 @@ class AvitoParser(IParcer):
         rooms_count = 0
 
         area_match = re.search(
-            r"(\d+(?:[.,]\d+)?)\s*м(?:²|2|<sup>2</sup>)?",
+            r"(\d+(?:[.,]\d+)?)\s*(?:м²|м2|кв\.?\s*м)",
             name,
-            re.IGNORECASE
+            re.IGNORECASE,
         )
 
         if area_match:
             area = float(area_match.group(1).replace(",", "."))
 
         floor_match = re.search(
-            r"(\d+)\s*/\s*\d+\s*эт",
+            r"(\d+)\s*/\s*\d+\s*(?:эт\.?|этаж)",
             name,
-            re.IGNORECASE
+            re.IGNORECASE,
         )
 
         if floor_match:
@@ -361,63 +491,113 @@ class AvitoParser(IParcer):
             r"\b(\d+)\s*[-‑–]?\s*"
             r"(?:к(?:\.|\b)|комн\.?|комнатн\w*)",
             name,
-            re.IGNORECASE
+            re.IGNORECASE,
         )
 
         if rooms_match:
             rooms_count = int(rooms_match.group(1))
 
+        # У студии не указываем количество комнат.
+        if re.search(r"\bстуди[яиюи]\b", name, re.IGNORECASE):
+            rooms_count = 0
+
         return floor, area, rooms_count
 
     def _extract_geo_labels(self, location: str) -> geoLabelDict:
         geo_data: geoLabelDict = {
-            "region": "",
-            "city": "",
+            "region": "Приморский край",
+            "city": "Владивосток",
             "district": "",
             "micro_district": "",
             "street": "",
-            "house": ""
+            "house": "",
         }
 
         if not location:
             return geo_data
 
-        text = location.strip()
-        lower_text = text.lower()
+        text = re.sub(r"\s+", " ", location).strip()
+        parts = [
+            part.strip(" .")
+            for part in re.split(r"[,;]", text)
+            if part.strip(" .")
+        ]
 
-        if "приморский край" in lower_text:
-            geo_data["region"] = "Приморский край"
+        for part in parts:
+            district_match = re.search(
+                r"(?:^|\b)(?:р-н|район)\s*[:.]?\s*(.+)$",
+                part,
+                re.IGNORECASE,
+            )
 
-        if "владивосток" in lower_text:
-            geo_data["city"] = "Владивосток"
+            if district_match and not geo_data["district"]:
+                geo_data["district"] = district_match.group(1).strip(" .")
 
-        district_match = re.search(
-            r"р-н\s*([^,]+)",
-            text,
-            re.IGNORECASE
-        )
+            micro_match = re.search(
+                r"(?:^|\b)(?:мкр\.?|микрорайон)\s*[:.]?\s*(.+)$",
+                part,
+                re.IGNORECASE,
+            )
 
-        if district_match:
-            geo_data["district"] = district_match.group(1).strip()
+            if micro_match and not geo_data["micro_district"]:
+                geo_data["micro_district"] = (
+                    micro_match.group(1).strip(" .")
+                )
 
-        street_match = re.search(
-            r"((?:ул\.?|улица|пр-т|проспект|пер\.?|переулок|"
-            r"ш\.?|шоссе)\s*[^,]+)",
-            text,
-            re.IGNORECASE
-        )
+            # Улица.
+            street_match = re.match(
+                r"^(?:ул\.?|улица|пр-т|проспект|пер\.?|переулок|"
+                r"ш\.?|шоссе|наб\.?|набережная|б-р|бульвар|"
+                r"пл\.?|площадь)\s*(.+)$",
+                part,
+                re.IGNORECASE,
+            )
 
-        if street_match:
-            geo_data["street"] = street_match.group(1).strip()
+            if street_match and not geo_data["street"]:
+                street = street_match.group(1).strip(" .")
 
-        house_match = re.search(
-            r"(?:д\.?|дом)\s*([\w/-]+)",
-            text,
-            re.IGNORECASE
-        )
+                # Убираем номер дома в конце сегмента.
+                street = re.sub(
+                    r"\s*,?\s*(?:(?:д(?:ом)?|стр(?:оение)?|"
+                    r"корп(?:ус)?)\.?\s*)?\d+[а-яА-Яa-zA-Z]?"
+                    r"(?:\s*/\s*\d+[а-яА-Яa-zA-Z]?)?\s*$",
+                    "",
+                    street,
+                    flags=re.IGNORECASE,
+                ).strip(" ,.")
 
-        if house_match:
-            geo_data["house"] = house_match.group(1).strip()
+                if street:
+                    geo_data["street"] = street
 
-        # Не записываем весь адрес в house, если номер дома не найден.
+            # Дом, строение или корпус — только по явному маркеру.
+            house_match = re.search(
+                r"\b(стр(?:оение)?|д(?:ом)?|корп(?:ус)?)"
+                r"\.?\s*(\d+[а-яА-Яa-zA-Z]?"
+                r"(?:\s*/\s*\d+[а-яА-Яa-zA-Z]?)?)",
+                part,
+                re.IGNORECASE,
+            )
+
+            if house_match and not geo_data["house"]:
+                marker = house_match.group(1).lower()
+                number = house_match.group(2).strip()
+
+                if marker.startswith("стр"):
+                    geo_data["house"] = f"стр. {number}"
+                elif marker.startswith("корп"):
+                    geo_data["house"] = f"корп. {number}"
+                else:
+                    geo_data["house"] = number
+
+            # Формат «ул. Нейбута, 137».
+            if (
+                not geo_data["house"]
+                and re.fullmatch(
+                    r"\d+[а-яА-Яa-zA-Z]?"
+                    r"(?:\s*/\s*\d+[а-яА-Яa-zA-Z]?)?",
+                    part,
+                )
+            ):
+                geo_data["house"] = part
+
         return geo_data
