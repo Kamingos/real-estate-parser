@@ -10,7 +10,7 @@ cities = {"vladivostok": 4701, "moscow": 1}
 
 # configs
 cianConfig = ParserConfig(
-        max_page_iteration=20,
+        max_page_iteration=1,
         min_iteration_time_span=0,
         max_iteration_time_span=0,
         cities = {"vladivostok": 4701, "moscow": 1},
@@ -69,4 +69,4 @@ if __name__ == "__main__":
     
     # General
     
-    DoAvito()
+    DoCian()

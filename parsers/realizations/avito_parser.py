@@ -24,7 +24,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from interfaces.parser_interfaces import IParcer
 from model.parser_config import ParserConfig
-from model.site_parse_data_model import SiteParseData, geoLabelDict
+from model.site_parse_data_model import AvitoSiteParseData as SiteParseData, geoLabelDict
 
 
 PAGE_WAIT_TIME = 10
