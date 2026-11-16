@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
 
 @dataclass
 class ParserConfig:
@@ -26,6 +27,13 @@ class ParserConfig:
 
     floor_min: int # Этаж
     floor_max: int # Этаж
+
+    # Параметры сетевого взаимодействия.
+    # Добавлены со значениями по умолчанию, чтобы существующие конфигурации
+    # Cian/Avito продолжали работать без изменений.
+    max_retries: int = 3        # число повторных попыток загрузки страницы
+    page_wait_time: int = 10    # ожидание загрузки страницы, секунды
+    headless: bool = False      # запуск браузера без окна
 
 
 

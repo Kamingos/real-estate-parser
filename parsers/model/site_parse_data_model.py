@@ -238,3 +238,126 @@ class AvitoSiteParseData:
 
     # Полный словарь параметров объявления (сырые данные)
     parameters: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class YandexSiteParseData:
+    # Основная информация об объявлении
+    site: str = field(default_factory=str)
+    url: str = field(default_factory=str)
+    external_id: str = field(default_factory=str)          # id из URL / JSON-LD sku
+    name: str = field(default_factory=str)                 # заголовок объявления
+    subtitles: str = field(default_factory=str)            # краткие подзаголовки
+    description: str = field(default_factory=str)
+    offer_article: str = field(default_factory=str)        # «DNV-…» / «Арт. …»
+    category: str = field(default_factory=str)             # APARTMENT / HOUSE / LOT / GARAGE / COMMERCIAL / ROOMS
+    object_type: Literal["flat", "room", "studio", "house", "land_plot", "garage", "other"] = "other"
+    housing_type: str = field(default_factory=str)         # новостройка / вторичка
+    breadcrumbs: list[str] = field(default_factory=list)
+
+    # Цена и условия сделки
+    price: int = 0
+    price_per_meter: int = 0                               # цена за единицу площади
+    price_unit: str = "м²"                                 # м² / сот.
+    currency: str = "RUB"
+    deal_type: str = "sale"
+    deal_conditions: str = field(default_factory=str)
+    mortgage_possible: bool | None = None
+    sale_method: str = field(default_factory=str)          # свободная / первичная продажа
+
+    # Основные характеристики объекта
+    area: float = 0.0
+    area_unit: str = "м²"                                  # м² / сот.
+    living_area: float = 0.0
+    kitchen_area: float = 0.0
+    rooms_count: int | None = None
+    rooms_in_flat: int | None = None                       # «1 комната в 5-к квартире»
+    floor: int = 0
+    floors_count: int = 0
+    ceiling_height: float = 0.0
+    bathroom: str = field(default_factory=str)             # раздельный / совмещённый
+    balcony: str = field(default_factory=str)
+    window_view: str = field(default_factory=str)
+
+    # Состояние и отделка
+    repairs: str = field(default_factory=str)              # «Состояние отличное»
+    finishing: str = field(default_factory=str)            # «Отделка — евроремонт»
+
+    # Информация о доме
+    year_building: int = 0
+    building_status: str = field(default_factory=str)      # сдан / строится / есть сданные
+    building_material: str = field(default_factory=str)    # кирпичное / блочное / монолит
+    building_type: str = field(default_factory=str)        # «Встроенное помещение, жилой дом»
+    completion_date: str = field(default_factory=str)      # срок сдачи
+    floors_range: str = field(default_factory=str)         # «от 8 до 17 этажей»
+    entrances_count: int = 0
+    apartments_count: int = 0                              # «38 квартир»
+    elevators: list[str] = field(default_factory=list)     # типы лифтов или «Лифта нет»
+    parking: str = field(default_factory=str)              # открытая / закрытая парковка
+    garbage_chute: bool | None = None                      # мусоропровод
+
+    # Инженерия и коммуникации
+    heating: str = field(default_factory=str)
+    water_supply: str = field(default_factory=str)
+    sewerage: str = field(default_factory=str)
+    electricity: str = field(default_factory=str)
+    gas: str = field(default_factory=str)                  # «Газа нет»
+    internet: bool | None = None
+    telephone: bool | None = None
+    sauna: bool | None = None
+
+    # Участок, гараж, коммерческое помещение
+    land_type: str = field(default_factory=str)            # «тип участка» (ИЖС и т. п.)
+    land_area: float = 0.0
+    land_area_unit: str = field(default_factory=str)       # сот. / га
+    garage_type: str = field(default_factory=str)          # машиноместо / гараж
+    commercial_purpose: str = field(default_factory=str)   # назначение помещения
+    entrance_type: str = field(default_factory=str)        # «Вход отдельный»
+
+    # Информация о ЖК и застройщике
+    residential_complex: str = field(default_factory=str)
+    residential_complex_class: str = field(default_factory=str)        # бизнес / комфорт
+    residential_complex_completion: str = field(default_factory=str)   # срок сдачи ЖК
+    developer: str = field(default_factory=str)
+    developer_foundation_year: int = 0
+    developer_completed_buildings: int = 0
+    developer_buildings_under_construction: int = 0
+
+    # Географическое расположение
+    geo_label: geoLabelDict = field(default_factory=lambda: {
+        "region": "",
+        "city": "",
+        "district": "",
+        "micro_district": "",
+        "street": "",
+        "house": ""
+    })
+    address: str = field(default_factory=str)
+    latitude: float = 0.0
+    longitude: float = 0.0
+
+    # Инфраструктура рядом
+    nearby_infrastructure: list[str] = field(default_factory=list)
+
+    # Информация о продавце
+    seller_name: str = field(default_factory=str)
+    seller_type: str = field(default_factory=str)          # Агент / Агентство / Застройщик / Частное лицо
+    agency: str = field(default_factory=str)
+    seller_experience: str = field(default_factory=str)    # «7 лет и 11 месяцев на сервисе»
+
+    # Фотографии
+    imgs: list[str] = field(default_factory=list)
+
+    # Статистика и информация об объявлении
+    publish_date: str = field(default_factory=str)         # data-creation-date
+    update_date: str = field(default_factory=str)          # data-update-date
+    views_count: int = 0
+    photos_count: int = 0
+    badges: list[str] = field(default_factory=list)        # теги карточки объявления
+
+    # Полный список характеристик со страницы (сырые данные)
+    feature_chips: list[str] = field(default_factory=list)
+
+    # Сырые характеристики «название -> значение» со страницы объявления
+    # (как поле parameters у CianSiteParseData/AvitoSiteParseData)
+    parameters: dict[str, str] = field(default_factory=dict)
