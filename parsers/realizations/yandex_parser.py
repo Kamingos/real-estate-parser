@@ -77,24 +77,46 @@ CITY_SLUGS = {
     "казань": "kazan",
 }
 
-# Шаблоны URL поисковой выдачи по категориям
-CATEGORY_URLS = {
-    "flat": "https://realty.yandex.ru/{city}/kupit/kvartira/?page={page}",
-    "newbuilding": "https://realty.yandex.ru/{city}/kupit/novostrojka/?page={page}",
-    "house": "https://realty.yandex.ru/{city}/kupit/dom/?page={page}",
-    "land_plot": "https://realty.yandex.ru/{city}/kupit/uchastok/?page={page}",
-    "garage": "https://realty.yandex.ru/{city}/kupit/garazh/?page={page}",
-    "commercial": (
-        "https://realty.yandex.ru/{city}/kupit/kommercheskaya-nedvizhimost/"
-        "?page={page}"
-    ),
-}
-
-# Комнаты ищутся через общий поиск с идентификатором региона (rgid)
+# Комнаты ищутся через общий поиск с идентификатором региона (rgid).
+# Оставлен как резервный вариант: основной URL — посадочная страница города.
 ROOMS_URL = (
     "https://realty.yandex.ru/search/?rgid={rgid}&type=SELL"
     "&category=ROOMS&route=search&page={page}"
 )
+
+# Шаблоны URL поисковой выдачи по категориям.
+# Для категорий, у которых исторически менялся URL, задано несколько
+# кандидатов: парсер пробует их по очереди и закрепляет рабочий вариант.
+CATEGORY_URLS: dict[str, tuple[str, ...]] = {
+    "flat": (
+        "https://realty.yandex.ru/{city}/kupit/kvartira/?page={page}",
+    ),
+    "newbuilding": (
+        # Выдача квартир в новостройках: реальные объявления /offer/<id>/.
+        # Адреса .../kupit/novostroyka/ и .../novostrojki/ отдают 404.
+        "https://realty.yandex.ru/{city}/kupit/kvartira/novostroyki/?page={page}",
+        # Каталог ЖК: отдаёт карточки жилых комплексов, а не объявления,
+        # поэтому используется только как резервный вариант.
+        "https://realty.yandex.ru/{city}/kupit/novostrojka/?page={page}",
+    ),
+    "house": (
+        "https://realty.yandex.ru/{city}/kupit/dom/?page={page}",
+    ),
+    "land_plot": (
+        "https://realty.yandex.ru/{city}/kupit/uchastok/?page={page}",
+    ),
+    "garage": (
+        "https://realty.yandex.ru/{city}/kupit/garazh/?page={page}",
+    ),
+    "commercial": (
+        "https://realty.yandex.ru/{city}/kupit/kommercheskaya-nedvizhimost/"
+        "?page={page}",
+    ),
+    "room": (
+        "https://realty.yandex.ru/{city}/kupit/komnata/?page={page}",
+        ROOMS_URL,
+    ),
+}
 
 # Категория выдачи -> тип объекта модели
 CATEGORY_OBJECT_TYPES = {
@@ -171,6 +193,11 @@ AREA_UNIT_LABELS = {
     "m2": "м²",
     "квм": "м²",
     "м²": "м²",
+    # Коды Яндекса в блоках {"value": 41.9, "unit": "SQUARE_METER"}
+    "squaremeter": "м²",
+    "squaremeters": "м²",
+    "sqmeter": "м²",
+    "sqmeters": "м²",
     "ha": "га",
     "hectare": "га",
     "га": "га",
@@ -217,8 +244,51 @@ FINISHING_LABELS = {
 BUILDING_STATUS_LABELS = {
     "built": "сдан",
     "delivered": "сдан",
+    "finished": "сдан",
+    "handed": "сдан",
+    "unfinished": "строится",
     "underconstruction": "строится",
     "construction": "строится",
+}
+
+# Подписи для вида из окон
+WINDOW_VIEW_LABELS = {
+    "yard": "во двор",
+    "courtyard": "во двор",
+    "court": "во двор",
+    "street": "на улицу",
+    "park": "на парк",
+    "forest": "на лес",
+    "sea": "на море",
+    "river": "на реку",
+    "lake": "на озеро",
+    "unknown": "",
+}
+
+# Подписи для парковки
+PARKING_LABELS = {
+    "open": "открытая",
+    "closed": "закрытая",
+    "underground": "подземная",
+    "multilevel": "многоуровневая",
+    "surface": "наземная",
+    "unknown": "",
+}
+
+# Подписи для способа продажи
+SALE_METHOD_LABELS = {
+    "primarysale": "первичная продажа",
+    "secondarysale": "вторичная продажа",
+    "unknown": "",
+}
+
+# Подписи для отопления
+HEATING_LABELS = {
+    "central": "центральное",
+    "centralized": "центральное",
+    "autonomous": "автономное",
+    "individual": "индивидуальное",
+    "unknown": "",
 }
 
 # Подписи для типов лифтов
@@ -239,11 +309,69 @@ CAPTCHA_TEXT_MARKERS = (
     "доступ ограничен",
 )
 
-# Маркеры JSON-состояния страницы
+# Признаки страницы 404. Проверяются только характерные тексты заглушки:
+# голая подстрока "404" встречается в служебных скриптах обычных страниц.
+NOT_FOUND_MARKERS = (
+    "ошибка 404",
+    "страница не найдена",
+    "удалось открыть страницу",
+    "по этому адресу",
+)
+
+# Маркеры JSON-состояния страницы. Яндекс периодически меняет контейнер,
+# поэтому поддерживаются все известные варианты.
 INITIAL_STATE_MARKERS = (
     "window.__INITIAL_STATE__",
-    "window._initialState",
     "window.__INITIAL_STATE",
+    "window.INITIAL_STATE",
+    "window._initialState",
+    "window.initialState",
+    "window.__PRELOADED_STATE__",
+    "window.__NEXT_DATA__",
+    "window.__NUXT__",
+    "window.__APOLLO_STATE__",
+)
+
+# Контейнер состояния актуальной вёрстки Яндекса:
+# <script id="initial_state_script">window.INITIAL_STATE = {...}</script>
+INITIAL_STATE_SCRIPT_RE = re.compile(
+    r'<script[^>]*id=["\']initial_state_script["\'][^>]*>(.*?)</script>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Ключи блоков рекомендаций. Их нельзя обходить при поиске объявления:
+# в relatedOffersData лежат ЧУЖИЕ объявления (единственный непустой offers).
+RECOMMENDATION_KEYS = {
+    "relatedoffersdata",
+    "relatednewbuildingsoffersdata",
+    "homeoffershistory",
+    "visitedoffers",
+    "nearbysitesdata",
+    "copies",
+    "cardplansoffers",
+}
+
+# Соответствие regionType в location.structuredAddress.component[] полям geo_label
+GEO_REGION_TYPES = {
+    "SUBJECT_FEDERATION": "region",
+    "CITY": "city",
+    "SUBJECT_FEDERATION_DISTRICT": "district",
+    "CITY_DISTRICT": "micro_district",
+    "STREET": "street",
+    "HOUSE": "house",
+}
+
+# Ключи, по которым распознаётся JSON состояния (а не произвольный JSON).
+STATE_HINT_KEYS = (
+    "offer",
+    "offers",
+    "offerid",
+    "offerdata",
+    "initialstate",
+    "pageprops",
+    "props",
+    "state",
+    "data",
 )
 
 # JSON-LD блок страницы
@@ -251,6 +379,38 @@ JSON_LD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
     re.DOTALL | re.IGNORECASE,
 )
+
+# Блок <script type="application/json"> / __NEXT_DATA__ со встроенным JSON
+JSON_SCRIPT_RE = re.compile(
+    r'<script[^>]*(?:type=["\']application/json["\']'
+    r'|id=["\']__NEXT_DATA__["\'])[^>]*>(.*?)</script>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Характеристики из заголовка объявления
+TITLE_AREA_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(м²|м2|кв\.?\s*м|сот(?:ок|ки|ка|\.)?|га)\b",
+    re.IGNORECASE,
+)
+TITLE_ROOMS_RE = re.compile(r"(\d+)\s*[- ]?\s*комнат", re.IGNORECASE)
+TITLE_ROOMS_SHORT_RE = re.compile(r"(\d+)\s*[- ]?\s*комн\.", re.IGNORECASE)
+
+# Реальные фотографии объявления Яндекса
+PHOTO_HOST_MARKERS = ("avatars.mds.yandex.net",)
+PHOTO_PATH_MARKERS = ("get-realty", "get-altay")
+# /minicard — дубль того же фото в другом размере, builder_logo_info —
+# логотип застройщика, get-realty-content — картинки ЖК/статей.
+PHOTO_EXCLUDE_MARKERS = (
+    "build-static",
+    "get-vertis-journal",
+    "get-realty-content",
+    "/minicard",
+    "builder_logo_info",
+    ".svg",
+)
+
+# Отладочный HTML страницы объявления (сохраняется один раз за запуск)
+DEBUG_OFFER_HTML = "yandex_offer_debug.html"
 
 # Ссылка/идентификатор объявления: https://realty.yandex.ru/offer/<id>/
 OFFER_URL_RE = re.compile(r"/offer/(\d{6,})/?")
@@ -463,6 +623,20 @@ def _looks_like_captcha(html: str, current_url: str = "") -> bool:
     return False
 
 
+def _looks_like_not_found(html: str) -> bool:
+    """
+    Определяет страницу 404 Яндекса (устаревший URL категории/объявления).
+
+    Без этой проверки страница-заглушка считается успешно загруженной:
+    она содержит несколько ссылок /offer/<id>/ из блока рекомендаций,
+    из-за чего парсер выбирает нерабочий URL-шаблон и собирает чужие
+    объявления.
+    """
+    lowered = html[:50000].casefold()
+
+    return any(marker in lowered for marker in NOT_FOUND_MARKERS)
+
+
 # ==============================================================================
 # Парсер
 # ==============================================================================
@@ -472,7 +646,10 @@ class YandexParser(IParcer):
 
     def __init__(self) -> None:
         self.categories = dict(CATEGORY_URLS)
-        self.categories["room"] = ROOMS_URL
+        # HTML первой страницы объявления без JSON состояния сохраняется
+        # в yandex_offer_debug.html, чтобы можно было найти актуальный
+        # контейнер данных.
+        self._offer_debug_saved = False
 
         # Настройки браузера (как в Cian/Avito-парсерах)
         self.options = Options()
@@ -529,6 +706,7 @@ class YandexParser(IParcer):
         offers: list[YandexSiteParseData] = []
         seen_urls: set[str] = set()
         seen_ids: set[str] = set()
+        self._offer_debug_saved = False
 
         min_delay, max_delay = self._resolve_delays(parserConfig)
 
@@ -630,18 +808,52 @@ class YandexParser(IParcer):
         """Обходит постранично выдачу категории и возвращает URL объявлений."""
         urls: list[str] = []
         page = 1
+        templates = self._category_templates(category)
+
+        if not templates:
+            logger.warning("Не заданы URL для категории %s", category)
+            return urls
+
+        # Шаблон, который отдал объявления на первой странице. Дальше
+        # используем только его, чтобы не дублировать запросы.
+        chosen: str | None = None
 
         while page <= max_pages:
-            page_url = self._category_page_url(category, city_slug, rgid, page)
+            candidates = (chosen,) if chosen else templates
+            page_urls: list[str] = []
+            success_any = False
 
-            success, page_urls = self._parse_listing_page(
-                driver,
-                page_url,
-                page_wait,
-                max_retries,
-            )
+            for template in candidates:
+                page_url = self._category_page_url(
+                    template, city_slug, rgid, page
+                )
 
-            if not success:
+                success, found = self._parse_listing_page(
+                    driver,
+                    page_url,
+                    page_wait,
+                    max_retries,
+                )
+
+                if not success:
+                    continue
+
+                success_any = True
+                logger.info(
+                    "Список %s/%s, стр. %d: найдено %d объявлений (%s)",
+                    city_slug,
+                    category,
+                    page,
+                    len(found),
+                    page_url,
+                )
+
+                if found:
+                    chosen = template
+                    page_urls = found
+                    break
+
+            if not success_any:
                 logger.warning(
                     "Не удалось загрузить список (город=%s, категория=%s, "
                     "стр. %d) — страница пропущена",
@@ -651,16 +863,14 @@ class YandexParser(IParcer):
                 )
                 break
 
-            logger.info(
-                "Список %s/%s, стр. %d: найдено %d объявлений",
-                city_slug,
-                category,
-                page,
-                len(page_urls),
-            )
-
             # Пустая страница означает конец выдачи
             if not page_urls:
+                if page == 1:
+                    logger.warning(
+                        "Категория %s не вернула объявлений ни по одному "
+                        "из URL-кандидатов",
+                        category,
+                    )
                 break
 
             urls.extend(page_urls)
@@ -670,20 +880,24 @@ class YandexParser(IParcer):
 
         return urls
 
+    def _category_templates(self, category: str) -> tuple[str, ...]:
+        """Возвращает все URL-кандидаты категории."""
+        templates = self.categories.get(category, ())
+
+        if isinstance(templates, str):
+            return (templates,)
+
+        return tuple(template for template in templates if template)
+
     def _category_page_url(
         self,
-        category: str,
+        template: str,
         city_slug: str,
         rgid: int,
         page: int,
     ) -> str:
-        """Собирает URL страницы выдачи для категории."""
-        template = self.categories[category]
-
-        if category == "room":
-            return template.format(rgid=rgid, page=page)
-
-        return template.format(city=city_slug, page=page)
+        """Собирает URL страницы выдачи по шаблону категории."""
+        return template.format(city=city_slug, rgid=rgid, page=page)
 
     def _parse_listing_page(
         self,
@@ -809,6 +1023,12 @@ class YandexParser(IParcer):
                 self._apply_state(data, state, url)
             except Exception as error:
                 logger.error("Ошибка разбора JSON состояния %s: %s", url, error)
+        else:
+            # Один раз за запуск сохраняем HTML, чтобы можно было найти
+            # актуальный контейнер данных, если Яндекс снова его сменит.
+            # Мелкие/пустые страницы (тестовые заглушки) не сохраняем.
+            if len(html) > 5000 and soup.get_text(strip=True):
+                self._save_offer_debug_html(html, url)
 
         # 2. Резерв — JSON-LD
         json_ld_nodes = self._extract_json_ld(soup)
@@ -828,6 +1048,10 @@ class YandexParser(IParcer):
         if html_data:
             self._apply_html(data, html_data)
 
+        # 4. Последний резерв — восстановление характеристик из заголовка
+        # («43 м², 1-комнатная квартира», «10 соток, участок» и т. п.).
+        self._apply_title_fallback(data)
+
         item = self._build_item(data, url)
 
         if item is None:
@@ -835,6 +1059,38 @@ class YandexParser(IParcer):
             return None
 
         return item
+
+    def _save_offer_debug_html(self, html: str, url: str) -> None:
+        """Один раз сохраняет HTML объявления для диагностики источников."""
+        if self._offer_debug_saved:
+            return
+
+        self._offer_debug_saved = True
+
+        found_markers = [
+            marker
+            for marker in (
+                *INITIAL_STATE_MARKERS,
+                "__NEXT_DATA__",
+                "__PRELOADED_STATE__",
+                "application/json",
+                "JSON.parse(",
+            )
+            if marker in html
+        ]
+
+        try:
+            with open(DEBUG_OFFER_HTML, "w", encoding="utf-8") as file:
+                file.write(html)
+            logger.warning(
+                "JSON состояния не найден для %s. HTML сохранён в %s. "
+                "Найденные маркеры: %s",
+                url,
+                DEBUG_OFFER_HTML,
+                ", ".join(found_markers) or "нет",
+            )
+        except OSError as error:
+            logger.error("Не удалось сохранить отладочный HTML: %s", error)
 
     # --------------------------- Загрузка страниц ---------------------------
 
@@ -876,7 +1132,7 @@ class YandexParser(IParcer):
                 if attempt >= max_attempts:
                     return None
 
-                sleep(uniform(2, 5) * attempt)
+                sleep(uniform(1, 3) * attempt)
                 continue
 
             self._wait_for_content(driver, content_selector, page_wait)
@@ -884,6 +1140,10 @@ class YandexParser(IParcer):
             html = driver.page_source
 
             if not _looks_like_captcha(html, driver.current_url):
+                if _looks_like_not_found(html):
+                    logger.warning("Страница не найдена (404): %s", url)
+                    return None
+
                 return html
 
             logger.warning(
@@ -987,7 +1247,7 @@ class YandexParser(IParcer):
             )
 
             if attempt < max_attempts:
-                sleep(uniform(3, 7))
+                sleep(uniform(1, 3))
 
         logger.warning("Капча не пройдена за %d попыток: %s", max_attempts, url)
         return None
@@ -996,48 +1256,300 @@ class YandexParser(IParcer):
 
     def _extract_initial_state(self, html: str) -> dict | None:
         """
-        Извлекает JSON состояния страницы (``window.__INITIAL_STATE__``).
+        Извлекает JSON состояния страницы из любого известного контейнера.
 
-        Используется raw_decode: он читает ровно один JSON-объект и
-        игнорирует хвост скрипта после него.
+        Поддерживаются:
+        - ``<script id="initial_state_script">window.INITIAL_STATE = {...}``
+          (актуальная вёрстка Яндекса) — быстрый путь;
+        - ``window.__INITIAL_STATE__`` / ``__PRELOADED_STATE__`` /
+          ``__NEXT_DATA__`` / ``__NUXT__`` / ``__APOLLO_STATE__``;
+        - ``JSON.parse("...")`` с JSON-строкой;
+        - ``<script type="application/json">`` и ``__NEXT_DATA__``;
+        - JS-литералы с ``undefined``/``!0``/``!1`` и висячими запятыми.
         """
+        # 0. Быстрый путь: известный контейнер initial_state_script
+        state = self._state_from_initial_state_script(html)
+        if state is not None:
+            return state
+
+        # 1. Явные маркеры состояния
         for marker in INITIAL_STATE_MARKERS:
             position = html.find(marker)
 
             while position != -1:
-                start = html.find("{", position)
+                state = self._decode_state_at(html, position + len(marker))
+                if state is not None:
+                    return state
 
-                if start != -1:
-                    try:
-                        decoded, _ = json.JSONDecoder().raw_decode(html[start:])
-                    except ValueError:
-                        decoded = None
-
-                    if isinstance(decoded, dict) and decoded:
-                        return decoded
+                state = self._decode_json_parse(html, position)
+                if state is not None and self._looks_like_state(state):
+                    return state
 
                 position = html.find(marker, position + 1)
+
+        # 2. JSON.parse(...) без явного маркера (только похожий на состояние)
+        position = html.find("JSON.parse(")
+        while position != -1:
+            state = self._decode_json_parse(html, position)
+            if state is not None and self._looks_like_state(state):
+                return state
+            position = html.find("JSON.parse(", position + 1)
+
+        # 3. <script type="application/json"> / __NEXT_DATA__
+        return self._state_from_json_scripts(html)
+
+    def _state_from_initial_state_script(self, html: str) -> dict | None:
+        """
+        Разбирает ``<script id="initial_state_script">`` с ``window.INITIAL_STATE``.
+
+        Снимает префикс ``window.INITIAL_STATE =`` и завершающую ``;``,
+        затем разбирает JSON (с починкой JS-литералов при необходимости).
+        """
+        match = INITIAL_STATE_SCRIPT_RE.search(html)
+        if not match:
+            return None
+
+        raw = match.group(1).strip()
+        if not raw:
+            return None
+
+        raw = re.sub(r"^window\.[A-Za-z_$][\w$]*\s*=\s*", "", raw)
+        raw = raw.rstrip().rstrip(";").rstrip()
+
+        return self._load_state_json(raw)
+
+    def _decode_state_at(self, html: str, position: int) -> dict | None:
+        """Декодирует объект, начинающийся сразу после маркера состояния."""
+        start = html.find("{", position)
+        if start == -1:
+            return None
+
+        # Между маркером и объектом допустимы только разделители
+        prefix = html[position:start]
+        if prefix.strip(" \t\r\n=:(;") != "":
+            return None
+
+        raw = self._balanced_object(html, start)
+        return self._load_state_json(raw) if raw else None
+
+    def _decode_json_parse(self, html: str, position: int) -> dict | None:
+        """Декодирует состояние из ``JSON.parse("...")`` или ``JSON.parse({...})``."""
+        call = html.find("JSON.parse(", position)
+        if call == -1:
+            return None
+
+        index = call + len("JSON.parse(")
+        while index < len(html) and html[index].isspace():
+            index += 1
+
+        if index >= len(html):
+            return None
+
+        if html[index] == "{":
+            raw = self._balanced_object(html, index)
+            return self._load_state_json(raw) if raw else None
+
+        quote = html[index]
+        if quote not in "\"'":
+            return None
+
+        start = index
+        index += 1
+        escaped = False
+
+        while index < len(html):
+            char = html[index]
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                break
+            index += 1
+
+        if index >= len(html):
+            return None
+
+        literal = html[start : index + 1]
+
+        try:
+            if quote == '"':
+                inner = json.loads(literal)
+            else:
+                body = literal[1:-1].replace("\\'", "'")
+                inner = json.loads('"' + body.replace('"', '\\"') + '"')
+        except ValueError:
+            return None
+
+        if not isinstance(inner, str):
+            return None
+
+        try:
+            decoded = json.loads(inner)
+        except ValueError:
+            return None
+
+        return decoded if isinstance(decoded, dict) and decoded else None
+
+    @staticmethod
+    def _balanced_object(text: str, start: int) -> str | None:
+        """Возвращает сбалансированный ``{...}`` фрагмент, учитывая строки."""
+        if start < 0 or start >= len(text) or text[start] != "{":
+            return None
+
+        depth = 0
+        quote = ""
+        escaped = False
+
+        for index in range(start, len(text)):
+            char = text[index]
+
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = ""
+                continue
+
+            if char in "\"'":
+                quote = char
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : index + 1]
+
+        return None
+
+    @classmethod
+    def _load_state_json(cls, raw: str) -> dict | None:
+        """Пытается разобрать JSON, при необходимости исправляя JS-литералы."""
+        for candidate in (raw, cls._sanitize_js_json(raw)):
+            try:
+                decoded = json.loads(candidate)
+            except (TypeError, ValueError):
+                continue
+
+            if isinstance(decoded, dict) and decoded:
+                return decoded
+
+        return None
+
+    @staticmethod
+    def _sanitize_js_json(raw: str) -> str:
+        """Заменяет JS-литералы, недопустимые в JSON."""
+        candidate = re.sub(r"(?<![\w$])undefined(?![\w$])", "null", raw)
+        candidate = re.sub(r"(?<![\w$])NaN(?![\w$])", "null", candidate)
+        candidate = re.sub(r"(?<![\w$])Infinity(?![\w$])", "null", candidate)
+        candidate = candidate.replace("!0", "true").replace("!1", "false")
+        candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+        return candidate
+
+    @staticmethod
+    def _looks_like_state(state: dict) -> bool:
+        """Проверяет, что JSON похож на состояние страницы объявлений."""
+        keys = {str(key).casefold() for key in state}
+
+        if keys & set(STATE_HINT_KEYS):
+            return True
+
+        return any(
+            _deep_find(state, (hint,)) is not None
+            for hint in ("offer", "offers", "offerId", "pageProps")
+        )
+
+    def _state_from_json_scripts(self, html: str) -> dict | None:
+        """Ищет состояние в JSON-скриптах страницы."""
+        for match in JSON_SCRIPT_RE.finditer(html):
+            raw = match.group(1).strip()
+            if not raw:
+                continue
+
+            try:
+                decoded = json.loads(raw)
+            except ValueError:
+                continue
+
+            if isinstance(decoded, dict) and self._looks_like_state(decoded):
+                return decoded
+
+        return None
+
+    def _find_offers_block(self, state: dict) -> Any:
+        """
+        Ищет блок ``offers`` в состоянии, пропуская блоки рекомендаций.
+
+        На странице объявления ``relatedOffersData.offers`` — единственный
+        непустой список ``offers``, но там лежат ЧУЖИЕ объявления. Поэтому
+        такие контейнеры при обходе игнорируются.
+        """
+        queue: list[Any] = [state]
+
+        while queue:
+            node = queue.pop(0)
+
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if not isinstance(key, str):
+                        continue
+                    if key.casefold() in RECOMMENDATION_KEYS:
+                        continue
+                    if key.casefold() == "offers" and value not in (
+                        None,
+                        "",
+                        [],
+                        {},
+                    ):
+                        return value
+                    queue.append(value)
+
+            elif isinstance(node, list):
+                queue.extend(node)
 
         return None
 
     def _iter_state_offers(self, state: dict) -> list[dict]:
-        """Возвращает все объявления из JSON состояния страницы."""
+        """Возвращает все объявления из JSON состояния (в т. ч. вложенные)."""
         offers: list[dict] = []
 
-        offers_block = state.get("offers")
+        # На странице объявления нужная карточка лежит в offerCard.card.
+        # Она должна быть первой и не подменяться рекомендациями.
+        card_container = state.get("offerCard")
+        if isinstance(card_container, dict):
+            card = card_container.get("card")
+            if isinstance(card, dict) and card:
+                offers.append(card)
 
-        if isinstance(offers_block, dict):
-            entities = offers_block.get("entities")
+        blocks: list[Any] = [state.get("offers")]
+        deep_offers = self._find_offers_block(state)
+        if deep_offers is not None:
+            blocks.append(deep_offers)
 
-            if isinstance(entities, dict):
-                for key, value in entities.items():
-                    if isinstance(value, dict):
-                        offer = dict(value)
-                        offer.setdefault("offerId", key)
-                        offers.append(offer)
-            elif isinstance(entities, list):
+        for block in blocks:
+            if isinstance(block, dict):
+                entities = block.get("entities")
+
+                if isinstance(entities, dict):
+                    for key, value in entities.items():
+                        if isinstance(value, dict):
+                            offer = dict(value)
+                            offer.setdefault("offerId", key)
+                            offers.append(offer)
+                elif isinstance(entities, list):
+                    offers.extend(
+                        value for value in entities if isinstance(value, dict)
+                    )
+                elif self._looks_like_offer(block):
+                    offers.append(block)
+
+            elif isinstance(block, list):
                 offers.extend(
-                    value for value in entities if isinstance(value, dict)
+                    value
+                    for value in block
+                    if isinstance(value, dict) and self._looks_like_offer(value)
                 )
 
         for key in ("offer", "offerData", "currentOffer"):
@@ -1045,11 +1557,97 @@ class YandexParser(IParcer):
             if isinstance(node, dict) and node:
                 offers.append(node)
 
+        deep_offer = _deep_find(state, ("offer", "offerData", "currentOffer"))
+        if isinstance(deep_offer, dict):
+            offers.append(deep_offer)
+
+        if not offers:
+            offers.extend(self._collect_offer_dicts(state))
+
+        result: list[dict] = []
+        seen: set[str] = set()
+
+        for offer in offers:
+            offer_id = _clean(offer.get("offerId") or offer.get("id"))
+            if offer_id and offer_id in seen:
+                continue
+            if offer_id:
+                seen.add(offer_id)
+            result.append(offer)
+
+        return result
+
+    @staticmethod
+    def _looks_like_offer(node: dict) -> bool:
+        """Проверяет, что словарь похож на объявление."""
+        keys = {str(key).casefold() for key in node}
+
+        return bool(
+            keys
+            & {
+                "offerid",
+                "title",
+                "price",
+                "category",
+                "area",
+                "rooms",
+                "roomscount",
+            }
+        )
+
+    def _collect_offer_dicts(self, state: dict) -> list[dict]:
+        """Находит все словари-объявления в произвольной структуре JSON."""
+        offers: list[dict] = []
+        queue: list[Any] = [state]
+
+        while queue:
+            node = queue.pop(0)
+
+            if isinstance(node, dict):
+                if self._looks_like_offer(node):
+                    offers.append(node)
+                else:
+                    for key, value in node.items():
+                        if isinstance(key, str) and (
+                            key.casefold() in RECOMMENDATION_KEYS
+                        ):
+                            continue
+                        queue.append(value)
+            elif isinstance(node, list):
+                queue.extend(node)
+
         return offers
 
-    def _pick_offer(self, state: dict, url: str) -> dict:
-        """Выбирает объявление страницы (по id из URL либо первое доступное)."""
+    def _pick_offer(self, state: dict, url: str) -> dict | None:
+        """
+        Выбирает объявление страницы строго по id из URL.
+
+        Приоритет — ``offerCard.card``. Если карточка не совпадает по id,
+        возвращается ``None``: лучше не заполнять поля, чем подставить
+        данные рекомендации из ``relatedOffersData``.
+        """
         target_id = self._offer_id_from_url(url)
+
+        card_container = state.get("offerCard")
+        card = (
+            card_container.get("card")
+            if isinstance(card_container, dict)
+            else None
+        )
+
+        if isinstance(card, dict) and card:
+            card_id = _clean(card.get("offerId") or card.get("id"))
+
+            if not target_id or card_id == target_id:
+                return card
+
+            logger.warning(
+                "offerCard.card содержит чужой оффер %s (ожидался %s): %s",
+                card_id,
+                target_id,
+                url,
+            )
+
         candidates = self._iter_state_offers(state)
 
         if target_id:
@@ -1060,27 +1658,43 @@ class YandexParser(IParcer):
                 if candidate_id == target_id:
                     return candidate
 
+            logger.warning(
+                "Целевой оффер %s не найден в JSON состояния: %s",
+                target_id,
+                url,
+            )
+            return None
+
         for key in ("offer", "offerData", "currentOffer"):
             node = state.get(key)
             if isinstance(node, dict) and node:
                 return node
 
-        if candidates:
-            return candidates[0]
-
-        fallback = _deep_find(state, ("offer",))
-
-        return fallback if isinstance(fallback, dict) else state
+        return candidates[0] if candidates else None
 
     def _apply_state(self, data: dict, state: dict, url: str) -> None:
         """Заполняет словарь данных из JSON состояния страницы."""
         offer = self._pick_offer(state, url)
 
+        if offer is None:
+            # Карточка не совпала по id с URL: не подставляем чужие данные.
+            return
+
         building = offer.get("building")
         building = building if isinstance(building, dict) else {}
 
+        house = offer.get("house")
+        house = house if isinstance(house, dict) else {}
+
         new_building = offer.get("newBuilding")
         new_building = new_building if isinstance(new_building, dict) else {}
+
+        card_container = state.get("offerCard")
+        card_container = (
+            card_container if isinstance(card_container, dict) else {}
+        )
+        site_card = card_container.get("siteCard")
+        site_card = site_card if isinstance(site_card, dict) else {}
 
         address_block = offer.get("address")
         address_block = address_block if isinstance(address_block, dict) else {}
@@ -1123,7 +1737,9 @@ class YandexParser(IParcer):
         )
         self._set(data, "description", _clean(offer.get("description")))
 
-        category = _clean(offer.get("category")).upper()
+        category = _clean(
+            offer.get("offerCategory") or offer.get("category")
+        ).upper()
         self._set(data, "category", category)
 
         self._set(
@@ -1137,12 +1753,19 @@ class YandexParser(IParcer):
             or self._article_from_text(data.get("description", "")),
         )
 
+        title_casefold = _clean(data.get("name")).casefold()
         object_type = self._object_type_from_category(category, url)
+
+        # Если категория в JSON не заполнена, URL /offer/<id>/ не даёт
+        # подсказок. В этом случае тип объекта берём из заголовка.
+        if not category:
+            title_type = self._object_type_from_title(title_casefold)
+            if title_type:
+                object_type = title_type
 
         flat_type = _clean(
             offer.get("flatType") or offer.get("apartmentType")
         ).casefold()
-        title_casefold = _clean(data.get("name")).casefold()
 
         if object_type == "flat" and (
             "studio" in flat_type or "студи" in title_casefold
@@ -1161,7 +1784,8 @@ class YandexParser(IParcer):
             data,
             "breadcrumbs",
             self._breadcrumbs_to_list(
-                _deep_find(offer, ("breadcrumbs",))
+                state.get("breadcrumbs")
+                or _deep_find(offer, ("breadcrumbs",))
             ),
         )
 
@@ -1171,25 +1795,41 @@ class YandexParser(IParcer):
         if isinstance(price_block, dict):
             price_value = price_block.get("value")
             currency_raw = price_block.get("currency")
+            price_per_part = price_block.get("valuePerPart")
+            price_unit_raw = price_block.get("unitPerPart")
         else:
             price_value = price_block
             currency_raw = offer.get("currency")
+            price_per_part = None
+            price_unit_raw = None
 
         self._set(data, "price", _to_int(price_value))
         self._set(data, "currency", _normalize_currency(currency_raw))
 
-        self._set(
-            data,
-            "price_per_meter",
-            _to_int(
-                _deep_find(
-                    offer,
-                    ("pricePerSquareMeter", "pricePerMeter", "pricePerSqm"),
-                )
-            ),
-        )
+        if price_per_part is None:
+            price_per_part = _deep_find(
+                offer,
+                ("pricePerSquareMeter", "pricePerMeter", "pricePerSqm"),
+            )
 
-        deal_type = _clean(offer.get("type") or offer.get("dealType")).casefold()
+        self._set(data, "price_per_meter", _to_int(price_per_part))
+
+        price_unit = _normalize_area_unit(price_unit_raw)
+        if price_unit:
+            self._set(data, "price_unit", price_unit)
+
+        deal_type = _clean(
+            offer.get("offerType")
+            or offer.get("type")
+            or offer.get("dealType")
+        ).casefold()
+        if not deal_type:
+            path = urlparse(url).path.casefold()
+            deal_type = (
+                "rent"
+                if any(part in path for part in ("snyat", "arenda", "rent"))
+                else "sale"
+            )
         self._set(data, "deal_type", "rent" if "rent" in deal_type else "sale")
 
         self._set(
@@ -1218,10 +1858,17 @@ class YandexParser(IParcer):
         self._set(
             data,
             "sale_method",
-            _clean(
+            _label_from_map(
                 _deep_find(
-                    offer, ("saleType", "saleMethod", "participationType")
-                )
+                    offer,
+                    (
+                        "dealStatus",
+                        "saleType",
+                        "saleMethod",
+                        "participationType",
+                    ),
+                ),
+                SALE_METHOD_LABELS,
             ),
         )
 
@@ -1230,12 +1877,19 @@ class YandexParser(IParcer):
         self._set(data, "area", area)
         self._set(data, "area_unit", _normalize_area_unit(area_unit))
 
-        living_area, _ = self._extract_measure(offer, ("livingArea",))
-        kitchen_area, _ = self._extract_measure(offer, ("kitchenArea",))
+        living_area, _ = self._extract_measure(
+            offer, ("livingSpace", "livingArea")
+        )
+        kitchen_area, _ = self._extract_measure(
+            offer, ("kitchenArea", "kitchenSpace")
+        )
         self._set(data, "living_area", living_area)
         self._set(data, "kitchen_area", kitchen_area)
 
         rooms_raw = offer.get("roomsCount")
+
+        if rooms_raw is None:
+            rooms_raw = offer.get("roomsTotal")
 
         if rooms_raw is None:
             rooms_raw = offer.get("rooms")
@@ -1255,6 +1909,11 @@ class YandexParser(IParcer):
 
         if isinstance(floor_raw, dict):
             floor_raw = floor_raw.get("value")
+
+        if floor_raw is None:
+            floors_offered = offer.get("floorsOffered")
+            if isinstance(floors_offered, list) and floors_offered:
+                floor_raw = floors_offered[0]
 
         self._set(data, "floor", _to_int(floor_raw))
 
@@ -1295,10 +1954,12 @@ class YandexParser(IParcer):
         self._set(
             data,
             "window_view",
-            _clean(
+            _label_from_map(
                 _deep_find(
                     offer, ("windowView", "viewFromWindows", "windowsView")
                 )
+                or house.get("windowView"),
+                WINDOW_VIEW_LABELS,
             ),
         )
 
@@ -1326,6 +1987,7 @@ class YandexParser(IParcer):
             "year_building",
             _to_int(
                 _deep_find(offer, ("yearBuild", "buildYear", "builtYear"))
+                or building.get("builtYear")
                 or building.get("year")
             ),
         )
@@ -1333,7 +1995,10 @@ class YandexParser(IParcer):
             data,
             "building_status",
             _label_from_map(
-                _deep_find(offer, ("buildingStatus", "houseStatus"))
+                _deep_find(
+                    offer, ("buildingStatus", "houseStatus", "buildingState")
+                )
+                or building.get("buildingState")
                 or building.get("status"),
                 BUILDING_STATUS_LABELS,
             ),
@@ -1361,12 +2026,7 @@ class YandexParser(IParcer):
         self._set(
             data,
             "completion_date",
-            _clean(
-                _deep_find(
-                    offer, ("completionDate", "deliveryDate", "deadline")
-                )
-                or new_building.get("completionDate")
-            ),
+            self._completion_date(offer, building, new_building),
         )
         self._set(
             data,
@@ -1403,9 +2063,11 @@ class YandexParser(IParcer):
         self._set(
             data,
             "parking",
-            _clean(
-                _deep_find(offer, ("parking", "parkingType"))
-                or building.get("parking")
+            _label_from_map(
+                _deep_find(offer, ("parkingType", "parking"))
+                or building.get("parkingType")
+                or building.get("parking"),
+                PARKING_LABELS,
             ),
         )
         self._set(
@@ -1420,7 +2082,11 @@ class YandexParser(IParcer):
         self._set(
             data,
             "heating",
-            _clean(_deep_find(offer, ("heating", "heatingType"))),
+            _label_from_map(
+                _deep_find(offer, ("heatingType", "heating"))
+                or building.get("heatingType"),
+                HEATING_LABELS,
+            ),
         )
         self._set(
             data,
@@ -1492,7 +2158,11 @@ class YandexParser(IParcer):
             data,
             "residential_complex",
             _clean(
-                new_building.get("name")
+                building.get("siteDisplayName")
+                or building.get("siteName")
+                or site_card.get("fullName")
+                or site_card.get("name")
+                or new_building.get("name")
                 or _deep_find(
                     offer, ("residentialComplex", "complexName", "newBuildingName")
                 )
@@ -1503,6 +2173,7 @@ class YandexParser(IParcer):
             "residential_complex_class",
             _clean(
                 new_building.get("class")
+                or site_card.get("class")
                 or _deep_find(offer, ("residentialComplexClass", "buildingClass"))
             ),
         )
@@ -1512,10 +2183,18 @@ class YandexParser(IParcer):
             _clean(
                 new_building.get("completionDate")
                 or _deep_find(offer, ("residentialComplexCompletion",))
+                or data.get("completion_date")
             ),
         )
 
+        site_developer = site_card.get("developer")
+        site_developer = (
+            site_developer if isinstance(site_developer, dict) else {}
+        )
+
         developer_block = _deep_find(offer, ("developer", "builder"))
+        if not isinstance(developer_block, dict):
+            developer_block = site_developer
 
         if isinstance(developer_block, dict):
             self._set(
@@ -1526,15 +2205,29 @@ class YandexParser(IParcer):
                 "developer_foundation_year",
                 _to_int(developer_block.get("foundationYear")),
             )
+
+            statistic = developer_block.get("statistic")
+            statistic = statistic if isinstance(statistic, dict) else {}
+            finished = statistic.get("finished")
+            finished = finished if isinstance(finished, dict) else {}
+            unfinished = statistic.get("unfinished")
+            unfinished = unfinished if isinstance(unfinished, dict) else {}
+
             self._set(
                 data,
                 "developer_completed_buildings",
-                _to_int(developer_block.get("completedBuildings")),
+                _to_int(
+                    developer_block.get("completedBuildings")
+                    or finished.get("houses")
+                ),
             )
             self._set(
                 data,
                 "developer_buildings_under_construction",
-                _to_int(developer_block.get("buildingsUnderConstruction")),
+                _to_int(
+                    developer_block.get("buildingsUnderConstruction")
+                    or unfinished.get("houses")
+                ),
             )
         else:
             self._set(data, "developer", _clean(developer_block))
@@ -1547,28 +2240,32 @@ class YandexParser(IParcer):
         # --- География ---------------------------------------------------------------
         geo_label = data["geo_label"]
 
-        self._fill_geo(
-            geo_label,
-            region=address_block.get("region")
+        geo_values: dict[str, Any] = {
+            "region": address_block.get("region")
             or location_block.get("region")
             or _deep_find(offer, ("region",)),
-            city=address_block.get("locality")
+            "city": address_block.get("locality")
             or address_block.get("city")
             or location_block.get("locality")
             or _deep_find(offer, ("locality", "city")),
-            district=address_block.get("district")
+            "district": address_block.get("district")
             or location_block.get("district")
             or _deep_find(offer, ("district", "districtName")),
-            micro_district=address_block.get("microDistrict")
+            "micro_district": address_block.get("microDistrict")
             or location_block.get("microDistrict")
             or _deep_find(offer, ("microDistrict", "microdistrict")),
-            street=address_block.get("street")
+            "street": address_block.get("street")
             or location_block.get("street")
             or _deep_find(offer, ("street",)),
-            house=address_block.get("house")
+            "house": address_block.get("house")
             or location_block.get("house")
             or _deep_find(offer, ("house",)),
-        )
+        }
+
+        # structuredAddress.component[] — самый точный источник географии
+        geo_values.update(self._geo_from_structured_address(location_block))
+
+        self._fill_geo(geo_label, **geo_values)
 
         address_raw = offer.get("address")
 
@@ -1625,13 +2322,19 @@ class YandexParser(IParcer):
         self._set(
             data,
             "seller_name",
-            _clean(seller.get("name") or seller.get("displayName")),
+            _clean(
+                seller.get("name")
+                or seller.get("displayName")
+                or seller.get("organization")
+            ),
         )
         self._set(
             data,
             "seller_type",
             _normalize_seller_type(
-                seller.get("type") or seller.get("sellerType")
+                seller.get("type")
+                or seller.get("sellerType")
+                or seller.get("category")
             ),
         )
         self._set(
@@ -1640,21 +2343,35 @@ class YandexParser(IParcer):
             _clean(
                 seller.get("agency")
                 or seller.get("agencyName")
+                or seller.get("organization")
                 or seller.get("company")
             ),
         )
-        self._set(
-            data,
-            "seller_experience",
-            _clean(
-                seller.get("experience")
-                or seller.get("experienceText")
-                or seller.get("registeredYears")
-            ),
+
+        seller_experience = _clean(
+            seller.get("experience")
+            or seller.get("experienceText")
+            or seller.get("registeredYears")
         )
+        if not seller_experience:
+            creation_date = _clean(seller.get("creationDate"))
+            year = creation_date[:4]
+            if year.isdigit():
+                seller_experience = f"на сервисе с {year}"
+
+        self._set(data, "seller_experience", seller_experience)
 
         # --- Фотографии ------------------------------------------------------------------
-        photos = offer.get("photos") or offer.get("images") or []
+        # В состоянии страницы фото лежат в отдельных списках (строки
+        # вида "//avatars..."). mainImages/appLargeImages — без /minicard.
+        photos = (
+            offer.get("appLargeImages")
+            or offer.get("mainImages")
+            or offer.get("fullImages")
+            or offer.get("photos")
+            or offer.get("images")
+            or []
+        )
         imgs: list[str] = []
 
         if isinstance(photos, list):
@@ -1675,7 +2392,10 @@ class YandexParser(IParcer):
                 if src.startswith("http"):
                     imgs.append(src)
 
-        self._set(data, "imgs", list(dict.fromkeys(imgs)))
+        self._set(data, "imgs", self._filter_photo_urls(imgs))
+
+        # totalImages — реальное число фото объявления (без дублей размеров)
+        self._set(data, "photos_count", _to_int(offer.get("totalImages")))
 
         # --- Статистика и маркеры ----------------------------------------------------------
         self._set(
@@ -1711,11 +2431,23 @@ class YandexParser(IParcer):
             self._as_str_list(_deep_find(offer, ("badges", "labels"))),
         )
 
-        features = _deep_find(
-            offer, ("features", "featureChips", "options", "tags")
-        )
-        self._set(data, "feature_chips", self._features_to_list(features))
-        self._set(data, "parameters", self._features_to_parameters(features))
+        tags = offer.get("tags")
+        if isinstance(tags, list) and tags:
+            tag_titles = self._as_str_list(tags)
+            self._set(data, "feature_chips", tag_titles)
+            self._set(
+                data,
+                "parameters",
+                {title: title for title in tag_titles},
+            )
+        else:
+            features = _deep_find(
+                offer, ("features", "featureChips", "options")
+            )
+            self._set(data, "feature_chips", self._features_to_list(features))
+            self._set(
+                data, "parameters", self._features_to_parameters(features)
+            )
 
     # --------------------------- Источник: JSON-LD ---------------------------
 
@@ -1743,13 +2475,76 @@ class YandexParser(IParcer):
 
         return nodes
 
-    def _apply_json_ld(self, data: dict, nodes: list[dict]) -> None:
-        """Заполняет словарь данных из JSON-LD (резервный источник)."""
+    @staticmethod
+    def _flatten_json_ld(nodes: list[dict]) -> list[dict]:
+        """Разворачивает ``@graph`` в плоский список узлов JSON-LD."""
+        flat: list[dict] = []
+
+        def walk(node: Any) -> None:
+            if not isinstance(node, dict):
+                return
+
+            graph = node.get("@graph")
+            if isinstance(graph, list):
+                for item in graph:
+                    walk(item)
+                return
+
+            flat.append(node)
+
         for node in nodes:
+            walk(node)
+
+        return flat
+
+    def _apply_json_ld(self, data: dict, nodes: list[dict]) -> None:
+        """
+        Заполняет словарь данных из JSON-LD (резервный источник).
+
+        Разворачивает ``@graph`` и ссылки ``mainEntity``/``itemOffered``:
+        данные объявления разложены по узлам Product, RealEstateListing,
+        Apartment и Offer. Координаты есть только здесь.
+        """
+        flat_nodes = self._flatten_json_ld(nodes)
+        by_id = {
+            _clean(node.get("@id")): node
+            for node in flat_nodes
+            if _clean(node.get("@id"))
+        }
+
+        for node in flat_nodes:
             node_type = _clean(node.get("@type")).casefold()
 
+            if node_type == "breadcrumblist":
+                crumbs: list[str] = []
+                for item in node.get("itemListElement") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    name = item.get("name")
+                    if not name and isinstance(item.get("item"), dict):
+                        name = item["item"].get("name")
+                    name = _clean(name)
+                    if name:
+                        crumbs.append(name)
+                self._set(data, "breadcrumbs", crumbs)
+                continue
+
+            if not node_type:
+                # Узел-ссылка: подставляем объект по @id
+                for link_key in ("mainEntity", "itemOffered"):
+                    link = node.get(link_key)
+                    linked_id = (
+                        _clean(link.get("@id"))
+                        if isinstance(link, dict)
+                        else ""
+                    )
+                    linked = by_id.get(linked_id)
+                    if isinstance(linked, dict):
+                        node = linked
+                        node_type = _clean(node.get("@type")).casefold()
+                        break
+
             if node_type not in (
-                "",
                 "product",
                 "offer",
                 "apartment",
@@ -1763,12 +2558,21 @@ class YandexParser(IParcer):
             offers_block = node.get("offers")
             offers_block = offers_block if isinstance(offers_block, dict) else {}
 
-            self._set(data, "name", _clean(node.get("name")))
+            name = _clean(node.get("name"))
+            # Product содержит длинный SEO-заголовок; короткий h1 важнее
+            if name and len(name) <= 150:
+                self._set(data, "name", name)
+
             self._set(data, "description", _clean(node.get("description")))
             self._set(
                 data,
                 "external_id",
                 _clean(node.get("sku") or node.get("productID")),
+            )
+            self._set(
+                data,
+                "category",
+                _clean(node.get("category")).upper(),
             )
 
             self._set(
@@ -1796,11 +2600,9 @@ class YandexParser(IParcer):
             self._set(
                 data,
                 "imgs",
-                [
-                    image
-                    for image in (_clean(item) for item in image_list)
-                    if image.startswith("http")
-                ],
+                self._filter_photo_urls(
+                    _clean(item) for item in image_list if _clean(item)
+                ),
             )
 
             address = offers_block.get("availableAtOrFrom")
@@ -1813,6 +2615,18 @@ class YandexParser(IParcer):
                     region=address.get("addressRegion"),
                     city=address.get("addressLocality"),
                     street=address.get("streetAddress"),
+                )
+                self._set(
+                    data,
+                    "address",
+                    ", ".join(
+                        part
+                        for part in (
+                            _clean(address.get("addressLocality")),
+                            _clean(address.get("streetAddress")),
+                        )
+                        if part
+                    ),
                 )
 
             geo = offers_block.get("availableAtOrFrom")
@@ -1835,6 +2649,11 @@ class YandexParser(IParcer):
                     ),
                 )
 
+            self._set(
+                data,
+                "floor",
+                _to_int(node.get("floorLevel")),
+            )
             self._set(
                 data,
                 "rooms_count",
@@ -1863,13 +2682,28 @@ class YandexParser(IParcer):
             "parameters": {},
         }
 
-        title = soup.find("h1")
+        title = self._select_first(
+            soup,
+            (
+                "h1",
+                '[data-testid*="offer-title"]',
+                '[data-testid*="title"]',
+                '[itemprop="name"]',
+            ),
+        )
         if isinstance(title, Tag):
             data["name"] = _clean(title.get_text(" ", strip=True))
 
-        price_element = soup.select_one(
-            '[data-testid="offer-price"]'
-        ) or soup.select_one('[itemprop="price"]')
+        price_element = self._select_first(
+            soup,
+            (
+                '[data-testid*="offer-price"]',
+                '[data-testid*="price"]',
+                '[itemprop="price"]',
+                '[class*="OfferPrice"]',
+                '[class*="PriceValue"]',
+            ),
+        )
 
         if isinstance(price_element, Tag):
             price_content = price_element.get("content")
@@ -1880,19 +2714,38 @@ class YandexParser(IParcer):
                     price_element.get_text(" ", strip=True)
                 )
 
-        description = soup.select_one(
-            '[data-testid="offer-description"]'
-        ) or soup.select_one('[itemprop="description"]')
+        # Если цену не нашли по разметке — берём первое денежное значение
+        if not data["price"]:
+            price_match = re.search(
+                r"(\d[\d\s\u00a0]{4,})\s*(?:₽|руб\.?)",
+                soup.get_text(" ", strip=True),
+            )
+            if price_match:
+                data["price"] = _to_int(price_match.group(1))
 
+        description = self._select_first(
+            soup,
+            (
+                '[data-testid*="offer-description"]',
+                '[data-testid*="description"]',
+                '[itemprop="description"]',
+                '[class*="OfferDescription"]',
+            ),
+        )
         if isinstance(description, Tag):
             data["description"] = _clean(
                 description.get_text(" ", strip=True)
             )
 
-        address = soup.select_one(
-            '[data-testid="offer-address"]'
-        ) or soup.select_one('[itemprop="address"]')
-
+        address = self._select_first(
+            soup,
+            (
+                '[data-testid*="offer-address"]',
+                '[data-testid*="address"]',
+                '[itemprop="address"]',
+                '[class*="OfferAddress"]',
+            ),
+        )
         if isinstance(address, Tag):
             data["address"] = _clean(address.get_text(" ", strip=True))
 
@@ -1904,65 +2757,294 @@ class YandexParser(IParcer):
                 if match:
                     data["external_id"] = match.group(1)
 
-        crumbs = soup.select('[data-testid="breadcrumbs"] a')
-        data["breadcrumbs"] = [
-            _clean(crumb.get_text(" ", strip=True))
-            for crumb in crumbs
-            if isinstance(crumb, Tag)
-        ]
+        if not data["external_id"]:
+            match = OFFER_ID_RE.search(url)
+            if match:
+                data["external_id"] = match.group(1)
+
+        crumb_selectors = (
+            '[data-testid*="breadcrumb"] a',
+            'nav[aria-label*="хлеб"] a',
+            '[class*="Breadcrumb"] a',
+            'ol[itemtype*="BreadcrumbList"] a',
+        )
+        for selector in crumb_selectors:
+            crumbs = soup.select(selector)
+            if crumbs:
+                data["breadcrumbs"] = [
+                    _clean(crumb.get_text(" ", strip=True))
+                    for crumb in crumbs
+                    if isinstance(crumb, Tag)
+                ]
+                break
 
         images: list[str] = []
-        for image in soup.find_all("img"):
+
+        for image in soup.find_all(["img", "source"]):
             if not isinstance(image, Tag):
                 continue
 
-            src = image.get("src")
-            if not isinstance(src, str) or not src.startswith("http"):
-                continue
+            for attribute in (
+                "src",
+                "data-src",
+                "data-original",
+                "data-lazy-src",
+                "data-url",
+            ):
+                value = image.get(attribute)
+                if isinstance(value, str):
+                    images.append(value)
 
-            host = (urlparse(src).hostname or "").casefold()
+            for attribute in ("srcset", "data-srcset"):
+                value = image.get(attribute)
+                if not isinstance(value, str):
+                    continue
+                for part in value.split(","):
+                    candidate = part.strip().split(" ")[0]
+                    if candidate:
+                        images.append(candidate)
 
-            if "yandex" not in host and "realty" not in host and "mds" not in host:
-                continue
-
-            images.append(src)
-
-        data["imgs"] = list(dict.fromkeys(images))
+        data["imgs"] = self._filter_photo_urls(images)
         data["parameters"] = self._extract_li_parameters(soup)
 
         return data
 
+    @staticmethod
+    def _select_first(
+        soup: BeautifulSoup,
+        selectors: tuple[str, ...],
+    ) -> Tag | None:
+        """Возвращает первый элемент по одному из CSS-селекторов."""
+        for selector in selectors:
+            element = soup.select_one(selector)
+            if isinstance(element, Tag):
+                return element
+
+        return None
+
     def _extract_li_parameters(self, soup: BeautifulSoup) -> dict[str, str]:
-        """Извлекает пары «название: значение» из списков характеристик."""
+        """Извлекает пары «название: значение» из блоков характеристик."""
         parameters: dict[str, str] = {}
 
-        for li in soup.select("li"):
-            if not isinstance(li, Tag):
+        # 1. Списки определений <dl><dt>…</dt><dd>…</dd></dl>
+        for definition_list in soup.find_all("dl"):
+            if not isinstance(definition_list, Tag):
                 continue
 
-            label_element = li.find("span")
+            for term in definition_list.find_all("dt"):
+                if not isinstance(term, Tag):
+                    continue
 
-            if not isinstance(label_element, Tag):
+                value_element = term.find_next_sibling("dd")
+                if not isinstance(value_element, Tag):
+                    value_element = term.find_next("dd")
+
+                if isinstance(value_element, Tag):
+                    self._add_parameter(
+                        parameters,
+                        term.get_text(" ", strip=True),
+                        value_element.get_text(" ", strip=True),
+                    )
+
+        # 2. Таблицы <tr><th>…</th><td>…</td></tr>
+        for row in soup.find_all("tr"):
+            if not isinstance(row, Tag):
                 continue
 
-            label_text = _clean(
-                label_element.get_text(" ", strip=True)
-            ).rstrip(":").strip()
+            cells = row.find_all(["th", "td"], recursive=False)
+            if len(cells) >= 2:
+                self._add_parameter(
+                    parameters,
+                    cells[0].get_text(" ", strip=True),
+                    cells[1].get_text(" ", strip=True),
+                )
 
-            if not label_text:
+        # 3. Пункты списков <li><span>Название</span> значение</li>.
+        # Футер и навигация содержат ссылки вида «Санкт-Петербург»,
+        # которые при делении по «-» давали мусорные пары.
+        for item in soup.find_all("li"):
+            if not isinstance(item, Tag):
                 continue
 
-            full_text = _clean(li.get_text(" ", strip=True))
-
-            if label_text not in full_text:
+            item_classes = " ".join(
+                value for value in (item.get("class") or []) if isinstance(value, str)
+            )
+            if any(
+                marker in item_classes
+                for marker in (
+                    "CacheFooterLinksSections",
+                    "Breadcrumb",
+                    "Menu",
+                    "Footer",
+                )
+            ):
+                continue
+            if item.find_parent(["footer", "nav"]) is not None:
                 continue
 
-            value = full_text.replace(label_text, "", 1).strip(" :\u00a0")
+            full_text = _clean(item.get_text(" ", strip=True))
+            if not full_text:
+                continue
 
-            if value:
-                parameters[label_text] = value
+            label_element = item.find(["span", "b", "strong", "dt"])
+
+            if isinstance(label_element, Tag):
+                label = _clean(
+                    label_element.get_text(" ", strip=True)
+                ).rstrip(":").strip()
+                value = full_text.replace(label, "", 1)
+            else:
+                label, value = self._split_parameter_text(full_text)
+
+            self._add_parameter(parameters, label, value)
+
+        # 4. Реальные блоки характеристик карточки объявления
+        feature_blocks = soup.select(
+            '[class*="OfferCardFeature__text"], '
+            '[class*="OfferCardDevBadge__name"]'
+        )
+        for block in feature_blocks:
+            if not isinstance(block, Tag):
+                continue
+
+            title = block.get("title")
+            text = (
+                _clean(title)
+                if isinstance(title, str) and title.strip()
+                else _clean(block.get_text(" ", strip=True))
+            )
+            label, value = self._feature_text_to_pair(text)
+            self._add_parameter(parameters, label, value)
+
+        # 5. Блоки параметров с data-testid / классами Яндекса
+        parameter_blocks = soup.select(
+            '[data-testid*="parameter"], [data-testid*="offer-fact"], '
+            '[class*="OfferFact"], [class*="OfferParam"]'
+        )
+        for block in parameter_blocks:
+            if not isinstance(block, Tag):
+                continue
+
+            label_element = block.find(["span", "div", "dt", "b", "strong"])
+
+            if isinstance(label_element, Tag) and label_element is not block:
+                label = _clean(
+                    label_element.get_text(" ", strip=True)
+                ).rstrip(":").strip()
+                value = _clean(block.get_text(" ", strip=True)).replace(
+                    label, "", 1
+                )
+            else:
+                label, value = self._split_parameter_text(
+                    _clean(block.get_text(" ", strip=True))
+                )
+
+            self._add_parameter(parameters, label, value)
 
         return parameters
+
+    @staticmethod
+    def _add_parameter(
+        parameters: dict[str, str],
+        label: str,
+        value: str,
+    ) -> None:
+        """Добавляет характеристику, отбрасывая мусорные пары."""
+        label = _clean(label).rstrip(":").strip()
+        value = _clean(value).strip(" :—–\u00a0")
+
+        if not label or not value:
+            return
+        if len(label) > 80 or len(value) > 1000:
+            return
+
+        # Метки футера/навигации и обрывки названий городов
+        if label.casefold() in {
+            "главная",
+            "назад",
+            "подробнее",
+            "показать ещё",
+            "показать еще",
+            "поделиться",
+            "фотография",
+            "санкт",
+            "ростов",
+            "спасск",
+            "проспект 100",
+        }:
+            return
+
+        parameters.setdefault(label, value)
+
+    @staticmethod
+    def _split_parameter_text(text: str) -> tuple[str, str]:
+        """Делит строку «Название: значение» на две части.
+
+        Разделитель «-» убран намеренно: «Санкт-Петербург» не является
+        парой «Санкт: Петербург».
+        """
+        match = re.match(r"^(.{2,80}?)\s*[:\u2014]\s*(.+)$", text)
+        if not match:
+            return "", ""
+
+        return match.group(1).strip(), match.group(2).strip()
+
+    @classmethod
+    def _feature_text_to_pair(cls, text: str) -> tuple[str, str]:
+        """Преобразует текст блока характеристики в пару «название: значение»."""
+        text = _clean(text)
+        if not text:
+            return "", ""
+
+        pair = cls._split_parameter_text(text)
+        if pair[0]:
+            return pair
+
+        match = re.match(
+            r"^от\s+(\d+)\s+до\s+(\d+)\s+этаж",
+            text,
+            re.IGNORECASE,
+        )
+        if match:
+            return "Этажность", f"от {match.group(1)} до {match.group(2)}"
+
+        match = re.match(r"^Дом\s+(\d{4})", text, re.IGNORECASE)
+        if match:
+            return "Год постройки", match.group(1)
+
+        match = re.match(
+            r"^(\d+)\s+этаж\s+из\s+(\d+)",
+            text,
+            re.IGNORECASE,
+        )
+        if match:
+            return "Этаж", f"{match.group(1)} из {match.group(2)}"
+
+        match = re.match(
+            r"^(\d[\d\s\u00a0]*)\s*₽\s+за\s+м",
+            text,
+            re.IGNORECASE,
+        )
+        if match:
+            return "Цена за м²", _clean(match.group(1))
+
+        for prefix, label in (
+            ("Санузел", "Санузел"),
+            ("Вид из окон", "Вид из окон"),
+            ("Застройщик", "Застройщик"),
+        ):
+            if text.casefold().startswith(prefix.casefold() + " "):
+                return label, text[len(prefix) :].strip()
+
+        parking_match = re.match(
+            r"^(Открытая|Закрытая|Подземная|Многоуровневая)\s+парковка$",
+            text,
+            re.IGNORECASE,
+        )
+        if parking_match:
+            return "Парковка", parking_match.group(1).casefold()
+
+        return "", ""
 
     def _apply_html(self, data: dict, html_data: dict) -> None:
         """Дозаполняет словарь данных значениями из HTML."""
@@ -1977,47 +3059,209 @@ class YandexParser(IParcer):
 
         parameters = html_data.get("parameters", {})
 
+        floor_text = self._get_parameter(parameters, "Этаж")
         if not data.get("floor"):
+            self._set(data, "floor", _to_int(floor_text))
+
+        floors_range_text = self._get_parameter(
+            parameters, "Этажность", "Этажей в доме"
+        )
+        range_match = re.search(
+            r"от\s*(\d+)\s*до\s*(\d+)", floors_range_text
+        )
+        if range_match and not data.get("floors_range"):
             self._set(
                 data,
-                "floor",
-                _to_int(self._get_parameter(parameters, "Этаж")),
+                "floors_range",
+                f"от {range_match.group(1)} до {range_match.group(2)}",
             )
 
         if not data.get("floors_count"):
-            floors_text = self._get_parameter(
-                parameters, "Этажей в доме", "Этажность"
+            floors_text = floors_range_text or self._get_parameter(
+                parameters, "Этажей", "Этажей в доме"
             )
 
             # Значение вида «7 из 12» содержит и этаж, и этажность
             if not floors_text:
-                floor_text = self._get_parameter(parameters, "Этаж")
                 floors_match = re.search(
                     r"\d+\s*(?:из|/)\s*(\d+)", floor_text
                 )
                 if floors_match:
                     floors_text = floors_match.group(1)
 
+            # «от 8 до 17 этажей» — диапазон этажности
+            range_match = re.search(
+                r"от\s*(\d+)\s*до\s*(\d+)", floors_text
+            )
+            if range_match:
+                self._set(
+                    data,
+                    "floors_range",
+                    f"от {range_match.group(1)} до {range_match.group(2)}",
+                )
+                floors_text = range_match.group(2)
+
             self._set(data, "floors_count", _to_int(floors_text))
 
+        rooms_text = self._get_parameter(
+            parameters, "Количество комнат", "Комнат", "Комнаты"
+        )
         if data.get("rooms_count") is None:
+            if "студи" in rooms_text.casefold():
+                self._set(data, "object_type", "studio")
+            else:
+                self._set(data, "rooms_count", _to_int_or_none(rooms_text))
+
+        if data.get("rooms_in_flat") is None:
             self._set(
                 data,
-                "rooms_count",
+                "rooms_in_flat",
                 _to_int_or_none(
-                    self._get_parameter(parameters, "Количество комнат", "Комнат")
+                    self._get_parameter(
+                        parameters,
+                        "Комнат в квартире",
+                        "Комната в квартире",
+                    )
                 ),
             )
 
-        if not data.get("area"):
+        if not data.get("window_view"):
             self._set(
                 data,
-                "area",
-                _to_float(
-                    self._get_parameter(
-                        parameters, "Общая площадь", "Площадь"
-                    )
+                "window_view",
+                self._get_parameter(parameters, "Вид из окон"),
+            )
+
+        area_text = self._get_parameter(
+            parameters, "Общая площадь", "Площадь", "Площадь объекта"
+        )
+        if not data.get("area"):
+            area_value = _to_float(area_text)
+            if area_value:
+                self._set(data, "area", area_value)
+                self._set(
+                    data,
+                    "area_unit",
+                    self._unit_from_text(area_text) or "м²",
+                )
+
+        living_text = self._get_parameter(
+            parameters, "Жилая площадь", "Площадь жилая"
+        )
+        if not data.get("living_area"):
+            self._set(data, "living_area", _to_float(living_text))
+
+        kitchen_text = self._get_parameter(
+            parameters, "Площадь кухни", "Кухня"
+        )
+        if not data.get("kitchen_area"):
+            self._set(data, "kitchen_area", _to_float(kitchen_text))
+
+        ceiling_text = self._get_parameter(
+            parameters, "Высота потолков", "Высота потолка"
+        )
+        if not data.get("ceiling_height"):
+            self._set(data, "ceiling_height", _to_float(ceiling_text))
+
+        if not data.get("bathroom"):
+            self._set(
+                data,
+                "bathroom",
+                self._get_parameter(parameters, "Санузел", "Санузел "),
+            )
+
+        if not data.get("parking"):
+            self._set(
+                data,
+                "parking",
+                self._get_parameter(parameters, "Парковка"),
+            )
+
+        if not data.get("balcony"):
+            self._set(
+                data,
+                "balcony",
+                self._get_parameter(
+                    parameters, "Балкон", "Балкон/лоджия", "Лоджия"
                 ),
+            )
+
+        if not data.get("repairs"):
+            self._set(
+                data,
+                "repairs",
+                self._get_parameter(parameters, "Ремонт", "Состояние"),
+            )
+
+        if not data.get("finishing"):
+            self._set(
+                data,
+                "finishing",
+                self._get_parameter(parameters, "Отделка"),
+            )
+
+        if not data.get("building_material"):
+            self._set(
+                data,
+                "building_material",
+                self._get_parameter(
+                    parameters, "Материал стен", "Тип дома", "Материал дома"
+                ),
+            )
+
+        if not data.get("building_type"):
+            self._set(
+                data,
+                "building_type",
+                self._get_parameter(parameters, "Тип дома", "Тип здания"),
+            )
+
+        if not data.get("land_type"):
+            self._set(
+                data,
+                "land_type",
+                self._get_parameter(parameters, "Тип участка", "Категория земель"),
+            )
+
+        land_text = self._get_parameter(
+            parameters, "Площадь участка", "Площадь земли"
+        )
+        if not data.get("land_area"):
+            land_value = _to_float(land_text)
+            if land_value:
+                self._set(data, "land_area", land_value)
+                self._set(
+                    data,
+                    "land_area_unit",
+                    self._unit_from_text(land_text) or "сот.",
+                )
+
+        if not data.get("garage_type"):
+            self._set(
+                data,
+                "garage_type",
+                self._get_parameter(parameters, "Тип гаража", "Тип машиноместа"),
+            )
+
+        if not data.get("commercial_purpose"):
+            self._set(
+                data,
+                "commercial_purpose",
+                self._get_parameter(parameters, "Назначение", "Тип помещения"),
+            )
+
+        if not data.get("seller_name"):
+            self._set(
+                data,
+                "seller_name",
+                self._get_parameter(parameters, "Продавец", "Собственник"),
+            )
+
+        if not data.get("seller_type"):
+            self._set(
+                data,
+                "seller_type",
+                self._get_parameter(parameters, "Тип продавца"),
             )
 
         if not data.get("year_building"):
@@ -2028,6 +3272,197 @@ class YandexParser(IParcer):
                     self._get_parameter(parameters, "Год постройки", "Год сдачи")
                 ),
             )
+
+    def _apply_title_fallback(self, data: dict) -> None:
+        """
+        Восстанавливает характеристики из заголовка объявления.
+
+        Заголовок Яндекса содержит площадь и тип объекта:
+        «43 м², 1-комнатная квартира», «10 соток, участок»,
+        «машиноместо», «9,1 м², комната». Это последний резерв, когда
+        JSON состояния и HTML-разметка не дали данных.
+        """
+        name = _clean(data.get("name"))
+        if not name:
+            return
+
+        text = name.casefold().replace("\u00a0", " ")
+        current_type = _clean(data.get("object_type")).casefold()
+
+        object_type = self._object_type_from_title(text)
+        if object_type and current_type in ("", "other"):
+            data["object_type"] = object_type
+
+        if "студи" in text and current_type in ("", "other", "flat"):
+            data["object_type"] = "studio"
+
+        if data.get("rooms_count") is None:
+            rooms_match = TITLE_ROOMS_RE.search(text) or (
+                TITLE_ROOMS_SHORT_RE.search(text)
+            )
+            if rooms_match:
+                self._set(data, "rooms_count", _to_int(rooms_match.group(1)))
+
+        is_land = object_type == "land_plot" or current_type == "land_plot"
+        area, unit = self._area_from_title(name, prefer_land=is_land)
+        if area:
+            if unit in ("сот.", "га"):
+                data["land_area"] = area
+                data["land_area_unit"] = unit
+
+                # Для участка площадь в заголовке — это площадь участка,
+                # поэтому она важнее ранее полученной площади дома.
+                if is_land:
+                    data["area"] = area
+                    data["area_unit"] = unit
+                    data["price_unit"] = unit
+            else:
+                self._set(data, "area", area)
+                self._set(data, "area_unit", unit)
+
+        if not data.get("category"):
+            self._set(
+                data,
+                "category",
+                self._category_from_object_type(data.get("object_type")),
+            )
+
+    @staticmethod
+    def _area_from_title(
+        name: str,
+        prefer_land: bool = False,
+    ) -> tuple[float, str]:
+        """
+        Извлекает площадь и единицу измерения из заголовка.
+
+        Для участков в заголовке может быть две площади:
+        «12,3 м² дом, 12 соток участок». В этом случае приоритет у
+        площади участка (сотки/гектары).
+        """
+        fallback: tuple[float, str] = (0.0, "")
+
+        for match in TITLE_AREA_RE.finditer(name):
+            value = _to_float(match.group(1))
+            raw_unit = match.group(2).casefold().replace(" ", "")
+
+            if raw_unit.startswith("сот"):
+                unit = "сот."
+            elif raw_unit.startswith("га"):
+                unit = "га"
+            else:
+                unit = "м²"
+
+            if unit in ("сот.", "га"):
+                if prefer_land:
+                    return value, unit
+                if not fallback[0]:
+                    fallback = (value, unit)
+                continue
+
+            if not fallback[0]:
+                fallback = (value, unit)
+
+        return fallback
+
+    @staticmethod
+    def _object_type_from_title(text: str) -> str:
+        """Определяет тип объекта по ключевым словам заголовка."""
+        if "квартир" in text or "апартамент" in text:
+            return "flat"
+
+        if re.search(r"\bкомнат[аы]?\b", text):
+            return "room"
+
+        if any(
+            word in text
+            for word in ("машиномест", "паркинг", "парковочн", "гараж")
+        ):
+            return "garage"
+
+        if any(word in text for word in ("участ", "соток", "сотк", "земл")):
+            return "land_plot"
+
+        if any(
+            word in text
+            for word in (
+                "офис",
+                "помещен",
+                "склад",
+                "магазин",
+                "коммерческ",
+                "производствен",
+            )
+        ):
+            return "other"
+
+        if any(word in text for word in ("дом", "коттедж", "дач", "таунхаус")):
+            return "house"
+
+        return ""
+
+    @staticmethod
+    def _category_from_object_type(object_type: Any) -> str:
+        """Подбирает категорию Яндекса по типу объекта модели."""
+        return {
+            "flat": "APARTMENT",
+            "studio": "APARTMENT",
+            "room": "ROOMS",
+            "house": "HOUSE",
+            "land_plot": "LOT",
+            "garage": "GARAGE",
+            "other": "COMMERCIAL",
+        }.get(_clean(object_type).casefold(), "")
+
+    @staticmethod
+    def _unit_from_text(text: str) -> str:
+        """Определяет единицу площади по тексту значения."""
+        lowered = _clean(text).casefold()
+
+        if "сот" in lowered:
+            return "сот."
+        if re.search(r"\bга\b", lowered):
+            return "га"
+        if "м²" in lowered or "м2" in lowered or "кв" in lowered:
+            return "м²"
+
+        return ""
+
+    @staticmethod
+    def _filter_photo_urls(urls: Any) -> list[str]:
+        """
+        Оставляет только реальные фотографии объявления.
+
+        Отбрасываются иконки интерфейса (build-static), обложки статей
+        (get-vertis-journal) и SVG. Поддерживаются протокол-относительные
+        URL и ленивые атрибуты (data-src/srcset).
+        """
+        result: list[str] = []
+
+        for raw in urls or []:
+            url = _clean(raw)
+            if not url:
+                continue
+
+            if url.startswith("//"):
+                url = f"https:{url}"
+
+            if not url.startswith("http"):
+                continue
+
+            host = (urlparse(url).hostname or "").casefold()
+            lowered = url.casefold()
+
+            if not any(marker in host for marker in PHOTO_HOST_MARKERS):
+                continue
+            if any(marker in lowered for marker in PHOTO_EXCLUDE_MARKERS):
+                continue
+            if not any(marker in lowered for marker in PHOTO_PATH_MARKERS):
+                continue
+
+            if url not in result:
+                result.append(url)
+
+        return result
 
     @staticmethod
     def _get_parameter(parameters: dict[str, str], *names: str) -> str:
@@ -2054,9 +3489,20 @@ class YandexParser(IParcer):
         url: str,
     ) -> YandexSiteParseData | None:
         """Создаёт модель YandexSiteParseData из собранных данных."""
-        external_id = _clean(data.get("external_id")) or (
-            self._offer_id_from_url(url) or ""
-        )
+        url_id = self._offer_id_from_url(url)
+        external_id = _clean(data.get("external_id"))
+
+        # id из URL — эталон: данные другого объявления недопустимы
+        if url_id:
+            if external_id and external_id != url_id:
+                logger.warning(
+                    "external_id %s не совпадает с id из URL %s",
+                    external_id,
+                    url_id,
+                )
+            external_id = url_id
+
+        external_id = external_id or url_id or ""
 
         name = _clean(data.get("name"))
         description = _clean(data.get("description"))
@@ -2085,7 +3531,22 @@ class YandexParser(IParcer):
         if not price_per_meter and price and area:
             price_per_meter = round(price / area)
 
-        imgs = list(data.get("imgs") or [])
+        category = _clean(data.get("category")) or self._category_from_object_type(
+            object_type
+        )
+
+        area_unit = _clean(data.get("area_unit")) or (
+            "сот." if object_type == "land_plot" else "м²"
+        )
+        price_unit = _clean(data.get("price_unit"))
+        if not price_unit:
+            price_unit = (
+                "сот."
+                if object_type == "land_plot" or area_unit == "сот."
+                else "м²"
+            )
+
+        imgs = self._filter_photo_urls(data.get("imgs") or [])
 
         return YandexSiteParseData(
             site="Yandex",
@@ -2095,20 +3556,20 @@ class YandexParser(IParcer):
             subtitles=_clean(data.get("subtitles")),
             description=description,
             offer_article=_clean(data.get("offer_article")),
-            category=_clean(data.get("category")),
+            category=category,
             object_type=object_type,
             housing_type=_clean(data.get("housing_type")),
             breadcrumbs=list(data.get("breadcrumbs") or []),
             price=price,
             price_per_meter=price_per_meter,
-            price_unit=_clean(data.get("price_unit")) or "м²",
+            price_unit=price_unit,
             currency=_normalize_currency(data.get("currency")) or "RUB",
             deal_type=_clean(data.get("deal_type")) or "sale",
             deal_conditions=_clean(data.get("deal_conditions")),
             mortgage_possible=data.get("mortgage_possible"),
             sale_method=_clean(data.get("sale_method")),
             area=area,
-            area_unit=_clean(data.get("area_unit")) or "м²",
+            area_unit=area_unit,
             living_area=_to_float(data.get("living_area")),
             kitchen_area=_to_float(data.get("kitchen_area")),
             rooms_count=data.get("rooms_count"),
@@ -2178,7 +3639,7 @@ class YandexParser(IParcer):
             publish_date=_clean(data.get("publish_date")),
             update_date=_clean(data.get("update_date")),
             views_count=_to_int(data.get("views_count")),
-            photos_count=len(imgs),
+            photos_count=_to_int(data.get("photos_count")) or len(imgs),
             badges=list(data.get("badges") or []),
             feature_chips=list(data.get("feature_chips") or []),
             parameters=dict(data.get("parameters") or {}),
@@ -2201,11 +3662,52 @@ class YandexParser(IParcer):
         if not item.external_id:
             problems.append("external_id")
 
+        url_id = self._offer_id_from_url(item.url)
+        if url_id and item.external_id and item.external_id != url_id:
+            problems.append("external_id!=url")
+
         if not item.name:
             problems.append("name")
 
         if item.price <= 0:
             problems.append("price")
+
+        # Для жилых объектов площадь обязательна: без неё объявление
+        # бесполезно для анализа (и раньше такие записи молча писались).
+        if item.object_type in {"flat", "studio", "room", "house"} and (
+            item.area <= 0
+        ):
+            problems.append("area")
+
+        if item.object_type == "land_plot" and (
+            item.area <= 0 and item.land_area <= 0
+        ):
+            problems.append("land_area")
+
+        filled_checks = (
+            bool(item.name),
+            item.price > 0,
+            item.area > 0,
+            item.rooms_count is not None,
+            item.floor > 0,
+            item.floors_count > 0,
+            bool(item.address),
+            bool(item.description),
+            bool(item.imgs),
+            bool(item.category),
+            item.object_type != "other",
+            bool(item.seller_name),
+            any(item.geo_label.values()),
+        )
+        logger.info(
+            "Заполненность %s: %d/%d (object_type=%s, area=%s, rooms=%s)",
+            item.url,
+            sum(filled_checks),
+            len(filled_checks),
+            item.object_type,
+            item.area,
+            item.rooms_count,
+        )
 
         for field_name in ("area", "living_area", "kitchen_area", "land_area"):
             value = getattr(item, field_name)
@@ -2332,6 +3834,19 @@ class YandexParser(IParcer):
         category: str,
     ) -> str:
         """Определяет тип жилья (новостройка/вторичка) по данным Яндекса."""
+        # flatType: NEW_FLAT -> новостройка, SECONDARY/FLAT -> вторичка
+        flat_type = _clean(
+            offer.get("flatType") or offer.get("apartmentType")
+        ).casefold()
+
+        if "new" in flat_type:
+            return "новостройка"
+
+        # newBuilding может быть булевым флагом, а не блоком
+        new_building = offer.get("newBuilding")
+        if isinstance(new_building, bool):
+            return "новостройка" if new_building else "вторичка"
+
         is_new = _deep_find_flag(
             offer, ("isNewBuilding", "isNew", "newBuildingFlag")
         )
@@ -2341,10 +3856,8 @@ class YandexParser(IParcer):
         if is_new is None and isinstance(building.get("newBuilding"), bool):
             is_new = building["newBuilding"]
 
-        if is_new is None:
-            new_building = offer.get("newBuilding")
-            if isinstance(new_building, dict) and new_building:
-                is_new = True
+        if is_new is None and isinstance(new_building, dict) and new_building:
+            is_new = True
 
         if is_new is None and category in ("NEWBUILDING", "NEW_BUILDING"):
             is_new = True
@@ -2355,10 +3868,82 @@ class YandexParser(IParcer):
         if is_new is False:
             return "вторичка"
 
+        if flat_type in ("secondary", "secondaryflat", "flat"):
+            return "вторичка"
+
         if category in ("APARTMENT", "FLAT", "ROOMS", "ROOM"):
             return "вторичка"
 
         return ""
+
+    @staticmethod
+    def _completion_date(
+        offer: dict,
+        building: dict,
+        new_building: dict,
+    ) -> str:
+        """Определяет срок сдачи дома из данных состояния."""
+        completion = _clean(
+            _deep_find(offer, ("completionDate", "deliveryDate", "deadline"))
+        )
+        if completion:
+            return completion
+
+        quarter = _to_int(building.get("builtQuarter"))
+        year = _to_int(building.get("builtYear") or building.get("year"))
+
+        if year:
+            return f"{quarter} квартал {year}" if quarter else str(year)
+
+        completion = _clean(new_building.get("completionDate"))
+        if completion:
+            return completion
+
+        # commissioningDateIndexValue: 20273 = 2027 год, 3 квартал
+        index_value = _to_int(offer.get("commissioningDateIndexValue"))
+        if index_value:
+            text = str(index_value)
+            if len(text) == 5:
+                return f"{text[4]} квартал {text[:4]}"
+            if len(text) == 4:
+                return text
+
+        return _clean(offer.get("keyHandoverDate"))
+
+    @staticmethod
+    def _geo_from_structured_address(
+        location_block: dict,
+    ) -> dict[str, str]:
+        """
+        Разбирает ``location.structuredAddress.component[]`` в поля geo_label.
+
+        regionType: SUBJECT_FEDERATION -> region, CITY -> city,
+        SUBJECT_FEDERATION_DISTRICT -> district, CITY_DISTRICT ->
+        micro_district, STREET -> street, HOUSE -> house.
+        """
+        result: dict[str, str] = {}
+
+        structured = location_block.get("structuredAddress")
+        if not isinstance(structured, dict):
+            return result
+
+        components = structured.get("component")
+        if not isinstance(components, list):
+            return result
+
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+
+            key = GEO_REGION_TYPES.get(
+                _clean(component.get("regionType")).upper()
+            )
+            value = _clean(component.get("value"))
+
+            if key and value and key not in result:
+                result[key] = value
+
+        return result
 
     @staticmethod
     def _extract_measure(
@@ -2495,6 +4080,15 @@ class YandexParser(IParcer):
             text,
             re.IGNORECASE,
         )
+        if match:
+            return match.group(1)
+
+        # У новостроек описание начинается с артикула без слова «артикул»:
+        # "DNV-07-01-02-003-003 Современная 1-комнатная квартира..."
+        match = re.match(
+            r"\s*([A-Z]{2,}(?:-[A-Za-z0-9]+)+)",
+            text,
+        )
 
         return match.group(1) if match else ""
 
@@ -2532,7 +4126,7 @@ class YandexParser(IParcer):
             "breadcrumbs": [],
             "price": 0,
             "price_per_meter": 0,
-            "price_unit": "м²",
+            "price_unit": "",
             "currency": "",
             "deal_type": "",
             "deal_conditions": "",

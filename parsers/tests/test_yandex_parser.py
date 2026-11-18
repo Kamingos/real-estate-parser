@@ -1,6 +1,7 @@
 """Юнит-тесты парсера Яндекс Недвижимости (без реального браузера)."""
 
 import builtins
+import json
 
 import pytest
 from conftest import (
@@ -90,6 +91,38 @@ def test_looks_like_captcha():
         "<html><h1>2-комнатная квартира</h1></html>",
         "https://realty.yandex.ru/offer/1/",
     )
+
+
+def test_looks_like_not_found():
+    not_found_html = (
+        "<html><head><title>Ошибка 404 - Страница не найдена</title></head>"
+        "<body><h1>Не&nbsp;удалось открыть страницу</h1>"
+        '<a href="/offer/4883053629432287180/">объявление</a></body></html>'
+    )
+
+    assert yp._looks_like_not_found(not_found_html)
+    assert not yp._looks_like_not_found(
+        "<html><head><title>Купить квартиру</title></head>"
+        "<body><h1>Купить квартиру во Владивостоке</h1></body></html>"
+    )
+
+
+def test_load_page_returns_none_on_404(yandex_parser):
+    not_found_html = (
+        "<html><head><title>Ошибка 404 - Страница не найдена</title></head>"
+        "<body><h1>Не&nbsp;удалось открыть страницу</h1></body></html>"
+    )
+    driver = FakeDriver({"*": not_found_html})
+
+    assert yandex_parser._load_page(driver, OFFER_URL, 1, max_attempts=2) is None
+
+
+def test_category_urls_exclude_dead_newbuilding_paths():
+    templates = yp.CATEGORY_URLS["newbuilding"]
+
+    assert any("kupit/kvartira/novostroyki" in template for template in templates)
+    assert not any("kupit/novostroyka/" in template for template in templates)
+    assert not any("/novostrojki/" in template for template in templates)
 
 
 def test_normalization_helpers():
@@ -346,6 +379,38 @@ def test_collect_offer_urls_pagination(yandex_parser, monkeypatch):
     ]
 
 
+def test_collect_offer_urls_falls_back_to_next_template(yandex_parser, monkeypatch):
+    """Первый URL-кандидат отдал 404 — парсер должен попробовать следующий."""
+    ok_url = "https://realty.yandex.ru/offer/3333333333333/"
+    calls = []
+
+    def fake_parse_listing(driver, page_url, page_wait, max_retries):
+        calls.append(page_url)
+
+        if "novostroyki" in page_url:
+            return False, []
+
+        return True, [ok_url]
+
+    monkeypatch.setattr(yandex_parser, "_parse_listing_page", fake_parse_listing)
+
+    urls = yandex_parser._collect_offer_urls(
+        driver=FakeDriver(),
+        city_slug="vladivostok",
+        rgid=585430,
+        category="newbuilding",
+        max_pages=1,
+        page_wait=1,
+        min_delay=0.0,
+        max_delay=0.0,
+        max_retries=1,
+    )
+
+    assert urls == [ok_url]
+    assert len(calls) == 2
+    assert "novostrojka" in calls[1]
+
+
 def test_load_page_retries_with_backoff(yandex_parser, monkeypatch):
     sleeps = []
     monkeypatch.setattr(yp, "sleep", lambda seconds: sleeps.append(seconds))
@@ -405,3 +470,210 @@ def test_parse_pipeline_deduplicates_and_quits(yandex_parser, monkeypatch):
     assert result == [item]
     assert driver.quit_called is True
     assert len(collect_calls) == len(yandex_parser.categories)
+
+
+def test_title_fallback_fills_area_rooms_and_type(yandex_parser):
+    html = (
+        "<html><body>"
+        "<h1>43 м², 1-комнатная квартира</h1>"
+        '<div data-testid="offer-price">10 900 000 ₽</div>'
+        "</body></html>"
+    )
+    driver = FakeDriver({OFFER_URL: html})
+
+    item = yandex_parser._parse_offer_page(driver, OFFER_URL, 5, 1)
+
+    assert item is not None
+    assert item.name == "43 м², 1-комнатная квартира"
+    assert item.price == 10900000
+    assert item.area == 43.0
+    assert item.area_unit == "м²"
+    assert item.rooms_count == 1
+    assert item.object_type == "flat"
+    assert item.category == "APARTMENT"
+    assert item.price_per_meter == round(10900000 / 43)
+
+
+def test_title_fallback_for_land_plot(yandex_parser):
+    html = (
+        "<html><body>"
+        "<h1>10 соток, участок</h1>"
+        '<div data-testid="offer-price">500 000 ₽</div>'
+        "</body></html>"
+    )
+    driver = FakeDriver({OFFER_URL: html})
+
+    item = yandex_parser._parse_offer_page(driver, OFFER_URL, 5, 1)
+
+    assert item is not None
+    assert item.object_type == "land_plot"
+    assert item.area == 10.0
+    assert item.land_area == 10.0
+    assert item.area_unit == "сот."
+    assert item.price_unit == "сот."
+    assert item.price_per_meter == 50000
+
+
+def test_title_fallback_prefers_land_area(yandex_parser):
+    html = (
+        "<html><body>"
+        "<h1>12,3 м² дом, 12 соток участок</h1>"
+        '<div data-testid="offer-price">1 200 000 ₽</div>'
+        "</body></html>"
+    )
+    driver = FakeDriver({OFFER_URL: html})
+
+    item = yandex_parser._parse_offer_page(driver, OFFER_URL, 5, 1)
+
+    assert item is not None
+    assert item.object_type == "land_plot"
+    assert item.area == 12.0
+    assert item.land_area == 12.0
+    assert item.area_unit == "сот."
+    assert item.price_unit == "сот."
+
+
+def test_filter_photo_urls_removes_interface_images(yandex_parser):
+    urls = [
+        "https://s.realty.yandex.net/build-static/app.webp",
+        "https://avatars.mds.yandex.net/get-vertis-journal/1/cover.jpg",
+        "https://avatars.mds.yandex.net/get-realty/1/1.jpg",
+        "//avatars.mds.yandex.net/get-altay/2/2.jpg",
+        "https://avatars.mds.yandex.net/get-realty/1/icon.svg",
+        "https://example.com/photo.jpg",
+    ]
+
+    assert yandex_parser._filter_photo_urls(urls) == [
+        "https://avatars.mds.yandex.net/get-realty/1/1.jpg",
+        "https://avatars.mds.yandex.net/get-altay/2/2.jpg",
+    ]
+
+
+def test_extract_initial_state_from_next_data(yandex_parser):
+    state = {
+        "props": {
+            "pageProps": {
+                "offer": {
+                    "offerId": OFFER_ID,
+                    "title": "1-комнатная квартира, 31,7 м²",
+                }
+            }
+        }
+    }
+    html = (
+        "<html><body>"
+        '<script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(state, ensure_ascii=False)}"
+        "</script></body></html>"
+    )
+
+    assert yandex_parser._extract_initial_state(html) == state
+
+
+def test_extract_initial_state_from_json_parse(yandex_parser):
+    state = {"offer": {"offerId": OFFER_ID, "title": "Квартира"}}
+    html = (
+        "<html><body><script>"
+        "window.__INITIAL_STATE__ = "
+        f"JSON.parse({json.dumps(json.dumps(state, ensure_ascii=False))});"
+        "</script></body></html>"
+    )
+
+    assert yandex_parser._extract_initial_state(html) == state
+
+
+def test_validate_item_rejects_residential_without_area(yandex_parser):
+    item = YandexSiteParseData(
+        site="Yandex",
+        url=OFFER_URL,
+        external_id=OFFER_ID,
+        name="Квартира",
+        price=1000,
+        object_type="flat",
+    )
+
+    assert yandex_parser._validate_item(item) is False
+
+
+def test_extract_initial_state_from_initial_state_script(yandex_parser):
+    state = {
+        "offerCard": {
+            "card": {"offerId": OFFER_ID, "description": "DNV-01-02"}
+        }
+    }
+    html = (
+        "<html><body>"
+        '<script id="initial_state_script">'
+        f"window.INITIAL_STATE = {json.dumps(state, ensure_ascii=False)};"
+        "</script></body></html>"
+    )
+
+    assert yandex_parser._extract_initial_state(html) == state
+
+
+def test_pick_offer_returns_none_for_alien_card(yandex_parser):
+    state = {
+        "offerCard": {
+            "card": {"offerId": SECOND_OFFER_ID},
+            "relatedOffersData": {"offers": [{"offerId": SECOND_OFFER_ID}]},
+        }
+    }
+
+    assert yandex_parser._pick_offer(state, OFFER_URL) is None
+
+
+def test_related_offers_data_is_not_used(yandex_parser):
+    target = {
+        "offerId": OFFER_ID,
+        "offerCategory": "APARTMENT",
+        "description": "Целевое объявление",
+        "price": {"value": 1000000, "currency": "RUR"},
+        "area": {"value": 40.0, "unit": "SQUARE_METER"},
+        "roomsTotal": 1,
+        "floorsOffered": [3],
+        "floorsTotal": 10,
+        "newBuilding": False,
+        "author": {"name": "Продавец", "category": "OWNER"},
+        "location": {"address": "Владивосток, улица Тестовая, 1"},
+        "totalImages": 2,
+        "mainImages": [
+            "//avatars.mds.yandex.net/get-realty-offers/1/main"
+        ],
+    }
+    alien = {
+        "offerId": SECOND_OFFER_ID,
+        "offerCategory": "APARTMENT",
+        "description": "Чужое объявление",
+        "price": {"value": 9999999, "currency": "RUR"},
+        "area": {"value": 99.0, "unit": "SQUARE_METER"},
+        "roomsTotal": 9,
+        "floorsOffered": [9],
+        "floorsTotal": 99,
+    }
+    state = {
+        "offerCard": {
+            "card": target,
+            "relatedOffersData": {"offers": [alien]},
+        },
+        "breadcrumbs": [],
+    }
+    html = (
+        "<html><body>"
+        '<script id="initial_state_script">'
+        f"window.INITIAL_STATE = {json.dumps(state, ensure_ascii=False)};"
+        "</script>"
+        "<h1>1-комнатная квартира, 40 м²</h1>"
+        "</body></html>"
+    )
+
+    item = yandex_parser._parse_offer_page(
+        FakeDriver({OFFER_URL: html}), OFFER_URL, 5, 1
+    )
+
+    assert item is not None
+    assert item.external_id == OFFER_ID
+    assert item.description == "Целевое объявление"
+    assert item.price == 1000000
+    assert item.area == 40.0
+    assert item.rooms_count == 1
+    assert item.floor == 3

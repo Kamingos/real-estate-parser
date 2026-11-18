@@ -153,8 +153,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--site",
         choices=[*available_sites(), "all"],
-        default="yandex",
-        help="источник данных (по умолчанию yandex)",
+        default="avito",
+        help="источник данных (по умолчанию avito)",
     )
     parser.add_argument(
         "--pages",

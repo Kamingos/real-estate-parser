@@ -83,25 +83,42 @@ python main.py --site yandex --pages 2 --min-delay 3 --max-delay 6 \
 данные берутся из DOM после загрузки страницы в браузере. Приоритет
 источников:
 
-1. `window.__INITIAL_STATE__` — JSON состояния страницы
-   (`offers.entities`, `offer`);
+1. JSON состояния страницы — поддерживаются `window.__INITIAL_STATE__`,
+   `__PRELOADED_STATE__`, `__NEXT_DATA__`, `__NUXT__`,
+   `__APOLLO_STATE__`, `JSON.parse("...")` и
+   `<script type="application/json">` (`offers.entities`, `offer`);
 2. JSON-LD (`<script type="application/ld+json">`, `Product`/`Offer`);
-3. HTML-разметка (`data-testid`, `itemprop`, ссылки `/offer/<id>/`,
-   галерея).
+3. HTML-разметка (`data-testid`, `itemprop`, `dl/dt/dd`, ссылки
+   `/offer/<id>/`, галерея);
+4. fallback из заголовка объявления: площадь, комнаты и тип объекта
+   (`43 м², 1-комнатная квартира`, `10 соток, участок`,
+   `машиноместо`, `9,1 м², комната`).
+
+Если JSON состояния не найден, HTML первой страницы объявления
+сохраняется в `yandex_offer_debug.html` — по нему можно определить
+актуальный контейнер данных.
 
 ### Категории и типы объектов
 
 | Категория URL | `object_type` |
 | --- | --- |
 | `kupit/kvartira` | `flat` |
-| `kupit/novostrojka` | `flat` + `housing_type = новостройка` |
+| `kupit/kvartira/novostroyki` (резерв — каталог ЖК `kupit/novostrojka`) | `flat` + `housing_type = новостройка` |
 | `kupit/dom` | `house` |
 | `kupit/uchastok` | `land_plot` |
 | `kupit/garazh` | `garage` |
 | `kupit/kommercheskaya-nedvizhimost` | `other` |
-| `search/?category=ROOMS` | `room` |
+| `kupit/komnata` (резерв: `search/?category=ROOMS`) | `room` |
 
+Для категорий с исторически менявшимся URL задано несколько
+кандидатов: парсер пробует их по очереди и закрепляет рабочий вариант.
 Студия определяется по `flatType`/`roomsCount`/заголовку.
+
+Адреса `kupit/novostroyka` и `novostrojki` отдают страницу 404 — их
+использовать нельзя. Страница 404 распознаётся по тексту заглушки
+(«Ошибка 404», «Страница не найдена», «Не удалось открыть страницу»)
+и не считается валидной выдачей, даже если содержит отдельные ссылки
+`/offer/<id>/` из блока рекомендаций.
 
 ### Маппинг полей (`YandexSiteParseData`)
 
@@ -145,7 +162,7 @@ python main.py --site yandex --pages 2 --min-delay 3 --max-delay 6 \
 | `latitude`, `longitude` | `coordinates.lat/lon` или JSON-LD `geo` |
 | `nearby_infrastructure` | `nearbyInfrastructure` |
 | `seller_name`, `seller_type`, `agency`, `seller_experience` | `seller`/`author` (`AGENCY` → Агентство, `OWNER` → Частное лицо) |
-| `imgs`, `photos_count` | `photos[].fullUrl/url` (protocol-relative → `https`) |
+| `imgs`, `photos_count` | `photos[].fullUrl/url`, JSON-LD `image`, `img[src/data-src/srcset]`; остаются только `avatars.mds.yandex.net/get-realty` и `get-altay` |
 | `publish_date`, `update_date` | `creationDate`, `updateDate` |
 | `views_count`, `badges`, `feature_chips` | `viewsCount`, `badges`, `features` |
 | `parameters` | `features` как словарь «название → значение» |
@@ -156,6 +173,10 @@ python main.py --site yandex --pages 2 --min-delay 3 --max-delay 6 \
 - коды Яндекса переводятся в читаемые подписи (`SQM` → `м²`,
   `MONOLITH` → `монолит`, `OWNER` → Частное лицо);
 - обязательные поля объявления: `url`, `external_id`, `name`, `price > 0`;
+- для жилых объектов (`flat`, `studio`, `room`, `house`) обязательна
+  `area > 0`, для участка — `area`/`land_area > 0`; записи без площади
+  отбрасываются, а не пишутся молча;
+- по каждому объявлению в лог пишется доля заполненности ключевых полей;
 - отрицательные площади/этажи обрезаются до 0, некорректные
   `rooms_count` сбрасываются в `None`;
 - несоответствия (этаж больше этажности, сумма жилой и кухонной площади
@@ -169,10 +190,24 @@ python main.py --site yandex --pages 2 --min-delay 3 --max-delay 6 \
   капчи парсер останавливается и ждёт решения капчи в открытом браузере
   (Enter — продолжить, `n` — пропустить). HTML капчи сохраняется в
   `yandex_captcha_debug.html`.
-- Селекторы и ключи JSON могут меняться; поэтому используются три
-  источника данных и нечёткий поиск ключей (`_deep_find`).
+- Селекторы и ключи JSON могут меняться; поэтому используются четыре
+  источника данных, нечёткий поиск ключей (`_deep_find`) и несколько
+  контейнеров состояния.
 - `rgid` городов задаётся вручную в `main.py` (`yandexConfig.cities`).
   Значение `585430` — Владивосток (используется для поиска комнат).
+
+### Нормализация уже собранного JSON
+
+Если `yandex_result.json` был получен старой версией парсера, его можно
+нормализовать без повторного обхода сайта:
+
+```bash
+uv run python tools/normalize_yandex_result.py --dry-run
+uv run python tools/normalize_yandex_result.py
+```
+
+Скрипт применяет fallback из заголовка, фильтрует фотографии,
+пересобирает модель и отбрасывает невалидные записи.
 
 ## Тесты и линтер
 
