@@ -1,8 +1,8 @@
 ================================================================================
-СТРУКТУРА БД: ИНТЕГРАЦИОННАЯ БАЗА ОБЪЯВЛЕНИЙ О НЕДВИЖИМОСТИ (PostgreSQL 12+)
+СТРУКТУРА БД: ИНТЕГРАЦИОННАЯ БАЗА ОБЪЯВЛЕНИЙ О НЕДВИЖИМОСТИ (PostgreSQL 15+)
 ================================================================================
-Файлы проекта: schema.sql (миграция), er_diagram.drawio (ER-диаграмма),
-db_structure.txt (этот файл).
+Файлы проекта: init_db.sql (схема с нуля), migrations/001_3nf.sql (миграция
+со старой схемы), er_diagram.drawio (ER-диаграмма), db_structure.txt (этот файл).
 
 1. ОБЩЕЕ ОПИСАНИЕ
 --------------------------------------------------------------------------------
@@ -14,19 +14,20 @@ db_structure.txt (этот файл).
 Аналогия с ТЗ:
   products   -> properties  (уникальный объект после дедупликации)
   offers     -> offers      (объявление конкретного сайта)
-  attributes -> property_attributes / offer_attributes (EAV)
+  attributes -> property_attributes_* / offer_attributes_* (типизированный EAV)
   категории/жанры -> справочники (object_types, housing_types, deal_types, tag_types, ...)
 
 Ключевые принципы:
   - Одно физическое помещение (property) = много объявлений (offers) с разных сайтов.
-  - Частые поля - типизированные колонки. Редкие и специфичные для сайта - EAV
-    (attribute_definitions + *_attributes). Списки (badges, infrastructure и т.п.) - tags.
+  - Частые поля - типизированные колонки. Редкие и специфичные для сайта -
+    типизированный EAV (6 таблиц: property_attributes_text/number/bool,
+    offer_attributes_text/number/bool). Списки (badges, infrastructure и т.п.) - tags.
   - Вместо CHECK-ограничений используются таблицы-справочники.
   - Неизвестное значение = NULL (исключение: строковые поля locations = '').
   - Даты publish_date, update_date, completion_date, completion - СТРОКИ как у парсеров.
   - Валюта по умолчанию RUB, price_unit по умолчанию 'м²'.
   - Истории цен нет: одна запись offer = последнее состояние.
-
+  - 3НФ: полная нормализация, нет дублирующихся данных.
 
 2. СВЯЗИ (дочерняя -> родительская)
 --------------------------------------------------------------------------------
@@ -34,8 +35,8 @@ offers                -> properties (property_id, NULLABLE), sites, sellers, dea
 offer_images          -> offers (CASCADE)
 offer_tags            -> offers (CASCADE), tags
 offer_legal_info      -> offers (1:1, PK = offer_id, CASCADE)
-offer_attributes      -> offers (CASCADE), attribute_definitions
-property_attributes   -> properties (CASCADE), attribute_definitions
+property_attributes_* -> properties (CASCADE), attribute_definitions
+offer_attributes_*    -> offers (CASCADE), attribute_definitions
 properties            -> object_types, housing_types, buildings, locations
 buildings             -> locations, residential_complexes
 residential_complexes -> developers
@@ -78,10 +79,10 @@ tags: id, tag_type_id (FK), name. UNIQUE(tag_type_id, name).
 --------------------------------------------------------------------------------
 locations (плоская гео-таблица)
   id, region, city, district, micro_district, street, house, address,
-  address_normalized, latitude, longitude
+  latitude, longitude
   UNIQUE(region, city, district, micro_district, street, house)
-  address_normalized - ключ дедупликации: адрес в нижнем регистре, без «ул./улица/д./дом»,
-  без знаков препинания, одинаковые пробелы. Заполняет загрузчик при записи.
+  address_normalized удалён. Вместо него функция fn_normalize_address()
+  и GIN-индекс по выражению.
 
 developers
   id, name UNIQUE, foundation_year, rating, reviews_count, completed_buildings,
@@ -89,7 +90,7 @@ developers
 
 residential_complexes
   id, developer_id (FK), name, class, type, completion, buildings_count
-  UNIQUE(name, COALESCE(developer_id, 0))
+  UNIQUE NULLS NOT DISTINCT (name, developer_id) — PostgreSQL 15+
 
 buildings (данные о доме)
   id, location_id (FK), residential_complex_id (FK), year_building, building_status,
@@ -101,19 +102,20 @@ buildings (данные о доме)
 sellers
   id, site_id (FK), name, contact_person, seller_type, agency, rating, reviews_count,
   registered_year, ads_count, experience, documents_verified
-  name = seller_name (Avito/Yandex) или rieltor (Cian). UNIQUE нет:
-  загрузчик ищет продавца по (site_id, name).
+  UNIQUE NULLS NOT DISTINCT (site_id, name) — PostgreSQL 15+
 
 
 5. ЯДРО
 --------------------------------------------------------------------------------
 properties (уникальный объект)
-  id, canonical_name, description, image_url (главное фото),
+  id, canonical_name, description,
   object_type_id (FK, NOT NULL), housing_type_id (FK), building_id (FK), location_id (FK),
   area, living_area, kitchen_area, rooms_count (INT), floor, ceiling_height,
-  cadastral_number,
-  dedup_key  - md5(address_normalized | object_type_id | floor | rooms_count | round(area)),
-  search_vector - tsvector (generated, 'russian') по canonical_name + description
+  cadastral_number
+  dedup_key удалён: ключ вычисляется на лету скриптом дедупликации по формуле:
+    md5(address_normalized | object_type_id | floor | rooms_count | round(area))
+  search_vector удалён: GIN-индекс по выражению to_tsvector('russian',
+    coalesce(canonical_name, '') || ' ' || coalesce(description, ''))
 
 offers (объявление сайта)
   id, property_id (FK, NULLABLE), site_id (FK, NOT NULL), seller_id (FK), deal_type_id (FK),
@@ -123,25 +125,34 @@ offers (объявление сайта)
   deal_conditions, mortgage_possible, sale_method, participation_type,
   publish_date, update_date (строки), views_count, views_today, photos_count, is_verified,
   parsed_at (TIMESTAMPTZ = date_parsed из ТЗ),
-  match_method     - способ сопоставления: cadastral / exact_key / fuzzy_address,
+  match_method     - способ сопоставления: cadastral / exactKey / fuzzy_address,
   match_confidence - уверенность 0.000..1.000 (для оценки ложных срабатываний),
-  search_vector    - tsvector (generated, 'russian') по name + description
   UNIQUE(site_id, external_id)  <- ключ UPSERT (INSERT ... ON CONFLICT)
+  search_vector удалён: GIN-индекс по выражению.
 
-offer_images        : id, offer_id (FK), url
-offer_tags          : PK(offer_id, tag_id)
-offer_legal_info    : offer_id (PK/FK), rosreestr_verified, ownership_type, owners_count,
-                      encumbrances, minors_owners, maternity_capital_used (в основном Cian)
-property_attributes : id, property_id, attribute_id, value_text, value_number, value_bool
-                      UNIQUE(property_id, attribute_id) - итоговые характеристики объекта
-offer_attributes    : id, offer_id, attribute_id, value_text, value_number, value_bool
-                      UNIQUE(offer_id, attribute_id) - что заявил сайт, включая сырой parameters
-  В EAV заполняется ровно одна колонка value_* согласно attribute_definitions.value_type.
+offer_images: id, offer_id (FK), url, position (INT NOT NULL DEFAULT 0)
+  Главное фото — ORDER BY position, id LIMIT 1.
+offer_tags: PK(offer_id, tag_id)
+offer_legal_info: offer_id (PK/FK), rosreestr_verified, ownership_type, owners_count,
+                  encumbrances, minors_owners, maternity_capital_used (в основном Cian)
+
+property_attributes_text  : property_id, attribute_id, value TEXT (PK)
+property_attributes_number: property_id, attribute_id, value NUMERIC (PK)
+property_attributes_bool  : property_id, attribute_id, value BOOLEAN (PK)
+offer_attributes_text  : offer_id, attribute_id, value TEXT (PK)
+offer_attributes_number: offer_id, attribute_id, value NUMERIC (PK)
+offer_attributes_bool  : offer_id, attribute_id, value BOOLEAN (PK)
+
+Триггеры fn_check_attribute_value_type() проверяют, что attribute_definitions.value_type
+совпадает с типом таблицы (text/number/bool).
 
 v_property_search (VIEW для веб-приложения)
-  property_id, canonical_name, image_url, object_type_id, area, rooms_count, floor,
-  location_id, search_vector, min_price (MIN(offers.price)), offers_count
+  property_id, canonical_name, image_url (подзапрос по offer_images),
+  object_type_id, area, rooms_count, floor, location_id,
+  search_vector (выражение to_tsvector), min_price (MIN(offers.price)), offers_count
   Это список результатов поиска: название, картинка, минимальная цена.
+  ПРИМЕЧАНИЕ: view не индексируется. Поиск по тексту идёт по индексам
+  ix_properties_search_fts и ix_offers_search_fts.
 
 
 6. МАППИНГ ПОЛЕЙ ПАРСЕРОВ -> БД
@@ -157,7 +168,7 @@ deal_type                          -> offers.deal_type_id (по deal_types.code)
 publish_date, update_date,
 views_count, views_today,
 photos_count, is_verified          -> offers.*
-imgs                               -> offer_images (строка на URL); первый -> properties.image_url
+imgs                               -> offer_images (строка на URL); первый -> ORDER BY position, id
 object_type                        -> properties.object_type_id
 housing_type                       -> properties.housing_type_id
 area, living_area, kitchen_area,
@@ -165,7 +176,8 @@ floor, ceiling_height,
 cadastral_number                   -> properties.*
 rooms_count                        -> properties.rooms_count (INT). У Avito строка:
                                       «студия»/«свободная планировка» -> NULL, исходная строка
-                                      в offer_attributes (rooms_count_raw)
+                                      в property_attributes_number (rooms_in_flat) или
+                                      offer_attributes_text (rooms_count_raw)
 rooms_in_flat (Yandex)             -> атрибут rooms_in_flat
 area_unit (Yandex)                 -> атрибут area_unit
 bathroom, balcony, window_view,
@@ -193,7 +205,7 @@ ramp, garbage_chute                -> buildings.*
 elevators                          -> tags (elevator)
 courtyard                          -> tags (courtyard)
 geo_label.*, address,
-latitude, longitude                -> locations.* (+ address_normalized считает загрузчик)
+latitude, longitude                -> locations.* (+ fn_normalize_address считает загрузчик)
 residential_complex,
 residential_complex_class/type/
 completion/buildings_count         -> residential_complexes
@@ -217,41 +229,62 @@ nearby_infrastructure              -> tags (infrastructure)
 badges                             -> tags (badge)
 feature_chips                      -> tags (feature_chip)
 breadcrumbs                        -> tags (breadcrumb)
-parameters (сырой dict)            -> offer_attributes (ключ -> attribute_definitions, site_data)
+parameters (сырой dict)            -> offer_attributes_* (ключ -> attribute_definitions, site_data)
 
 
 7. ИНДЕКСЫ
 --------------------------------------------------------------------------------
 Расширение: pg_trgm.
-offers               : UNIQUE(site_id, external_id); (property_id, price) - для MIN(price) по
-                       объекту; (seller_id), (deal_type_id), (price), (parsed_at);
-                       GIN(search_vector)
-properties           : (object_type_id), (housing_type_id), (building_id), (location_id),
-                       (area), (rooms_count), (floor), (cadastral_number), (dedup_key);
-                       GIN trigram(canonical_name); GIN(search_vector)
-locations            : (city, district), (street, house), GiST point(longitude, latitude),
-                       GIN trigram(address), (address_normalized),
-                       GIN trigram(address_normalized)
-buildings            : (location_id), (residential_complex_id)
-residential_complexes: (name), (developer_id)
-sellers              : (site_id, name)
-offer_images         : (offer_id)
-offer_tags           : PK(offer_id, tag_id), (tag_id)
-attribute_definitions: (category_id)
-property_attributes / offer_attributes:
-                       UNIQUE(entity_id, attribute_id);
-                       (attribute_id, left(value_text, 255)) - префиксный индекс;
-                       (attribute_id, value_number) WHERE value_number IS NOT NULL
 
-ВАЖНО для запросов по тексту атрибутов:
-  WHERE attribute_id = ? AND left(value_text, 255) = ?   (то же выражение, иначе индекс не сработает)
+EAV текстовые:
+  property_attributes_text (attribute_id, left(value, 255))
+  offer_attributes_text (attribute_id, left(value, 255))
+
+EAV числовые:
+  property_attributes_number (attribute_id, value)
+  offer_attributes_number (attribute_id, value)
+
+EAV булевы:
+  property_attributes_bool (attribute_id, value)
+  offer_attributes_bool (attribute_id, value)
+
+offers:
+  UNIQUE(site_id, external_id)
+  (property_id, price) - для MIN(price) по объекту
+  (seller_id), (deal_type_id), (price), (parsed_at)
+  GIN по выражению: to_tsvector('russian', coalesce(name,'')||' '||coalesce(description,''))
+
+properties:
+  (object_type_id), (housing_type_id), (building_id), (location_id)
+  (area), (rooms_count), (floor), (cadastral_number)
+  GIN trigram(canonical_name)
+  GIN по выражению: to_tsvector('russian', coalesce(canonical_name,'')||' '||coalesce(description,''))
+
+locations:
+  UNIQUE (region, city, district, micro_district, street, house)
+  (city, district), (street, house)
+  GiST point(longitude, latitude)
+  GIN trigram(address)
+  GIN trigram по выражению fn_normalize_address(region, city, district, micro_district, street, house)
+
+buildings: (location_id), (residential_complex_id)
+residential_complexes: UNIQUE NULLS NOT DISTINCT (name, developer_id)
+sellers: UNIQUE NULLS NOT DISTINCT (site_id, name)
+
+offer_images: (offer_id, position)
+offer_tags: PK(offer_id, tag_id), (tag_id)
+attribute_definitions: (category_id)
+
+ПРИМЕЧАНИЕ для запросов по тексту атрибутов:
+  WHERE attribute_id = ? AND left(value, 255) = ?
+  (то же выражение, иначе индекс не сработает)
 
 Примеры запросов веб-приложения:
   Поиск (GET /search?q=...):
     SELECT * FROM v_property_search
     WHERE search_vector @@ websearch_to_tsquery('russian', :q)
     ORDER BY ts_rank(search_vector, websearch_to_tsquery('russian', :q)) DESC LIMIT 20;
-    (поиск по описанию объявлений: offers.search_vector @@ ..., затем DISTINCT property_id)
+    (поиск по индексу идёт по properties/offers; view не индексируется)
   Карточка (GET /product/<id>):
     SELECT * FROM properties WHERE id = :id;
     SELECT o.*, s.name AS site_name FROM offers o JOIN sites s ON s.id = o.site_id
@@ -262,23 +295,34 @@ property_attributes / offer_attributes:
 --------------------------------------------------------------------------------
 ЗАГРУЗКА (на каждое объявление из JSON парсера):
   1. sites: найти id по code.
-  2. locations: нормализовать адрес -> address_normalized; UPSERT по
-     (region, city, district, micro_district, street, house).
+  2. locations: UPSERT по (region, city, district, micro_district, street, house).
+     address_normalized НЕ сохраняется — fn_normalize_address() вызывается в запросах.
   3. developers (если есть) -> residential_complexes (если есть) -> buildings.
-  4. sellers: найти или создать по (site_id, name).
-  5. properties: создать ПРЕДВАРИТЕЛЬНУЮ запись для этого объявления (area, rooms_count, floor,
-     object_type, location, building, cadastral_number и т.д.), посчитать dedup_key,
-     canonical_name = name объявления. Только так характеристики объявления до
-     дедупликации имеют место хранения (в offers их нет).
+  4. sellers: найти или создать по (site_id, name) с IS NOT DISTINCT FROM.
+  5. properties: создать ПРЕДВАРИТЕЛЬНУЮ запись для этого объявления
+     (area, rooms_count, floor, object_type, location, building, cadastral_number и т.д.).
+     canonical_name = name (обрезать 512).
+     dedup_key НЕ сохраняется: вычисляется на лету:
+       md5(fn_normalize_address(...) || object_type_id || floor || rooms_count || round(area))
   6. offers: UPSERT по (site_id, external_id); property_id = предварительный property.
-  7. offer_images, offer_tags, offer_legal_info, offer_attributes - перезаписать.
-  Повторный парсинг: offers обновляется по UNIQUE(site_id, external_id), parsed_at = now().
-  offers.property_id остаётся NULL допустимым значением (напр. объявление ещё не обработано).
+     price_unit по умолчанию 'м²', currency 'RUB'.
+  7. offer_images: DELETE по offer_id, затем INSERT с position (0,1,2...).
+     Главное фото: ORDER BY position, id LIMIT 1.
+  8. offer_tags: DELETE по offer_id, затем INSERT.
+  9. offer_legal_info: создавать только если есть хотя бы одно значение.
+  10. property_attributes_*: DELETE по property_id, затем INSERT.
+  11. offer_attributes_*: DELETE по offer_id, затем INSERT.
+      Сырой parameters: сначала словарь русских лейблов на известные коды,
+      иначе новый код в site_data.
+  Повторный парсинг: offers обновляется по UNIQUE(site_id, external_id),
+  parsed_at = now(). properties переиспользуются по (site_id, external_id).
 
 ДЕДУПЛИКАЦИЯ (отдельный скрипт, объединяет properties):
+  dedup_key вычисляется на лету:
+    md5(address_normalized | object_type_id | floor | rooms_count | round(area))
   Критерии (по убыванию надёжности):
     1. cadastral   : одинаковый непустой cadastral_number (match_confidence = 1.000).
-    2. exact_key   : одинаковый dedup_key (адрес + тип + этаж + комнаты + площадь) и
+    2. exactKey    : одинаковый dedup_key (адрес + тип + этаж + комнаты + площадь) и
                      |area1 - area2| <= 0.5 м² (match_confidence = 0.95).
     3. fuzzy_address: similarity(address_normalized) >= 0.85 (pg_trgm / rapidfuzz),
                      совпадают object_type, floor, rooms_count, |area1 - area2| <= 0.5
@@ -296,9 +340,12 @@ property_attributes / offer_attributes:
 
 9. ЧЕГО В БД НЕТ (намеренно)
 --------------------------------------------------------------------------------
+- address_normalized в locations — только функция fn_normalize_address().
+- dedup_key в properties — вычисляется на лету скриптом дедупликации.
+- image_url в properties — главное фото: SELECT url FROM offer_images WHERE offer_id IN (...) ORDER BY position, id LIMIT 1.
+- search_vector в properties/offers — GIN-индекс по выражению to_tsvector().
 - Истории цен.
 - Сырого JSON записи парсера.
-- Флага активности объявления.
 - created_at / updated_at у properties.
 - CHECK-ограничений на значения (вместо них справочники).
 - Флагов is_studio / is_free_layout (покрывают object_type и rooms_count_raw).

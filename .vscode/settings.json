@@ -2,5 +2,6 @@
     "python.analysis.extraPaths": [
         "./parsers/interfaces"
     ],
-    "dotnet.defaultSolution": "Backend.slnx"
+    "dotnet.defaultSolution": "Backend.slnx",
+    "python.terminal.useEnvFile": true
 }

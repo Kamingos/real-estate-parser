@@ -1,6 +1,6 @@
 -- =====================================================================
 -- Интеграционная БД: объявления о недвижимости (Cian / Avito / Yandex)
--- PostgreSQL 12+ (нужны generated columns и расширение pg_trgm)
+-- PostgreSQL 15+ (3НФ, типизированный EAV, UNIQUE NULLS NOT DISTINCT)
 -- =====================================================================
 
 BEGIN;
@@ -76,12 +76,40 @@ CREATE TABLE locations (
     street              VARCHAR(255) NOT NULL DEFAULT '',
     house               VARCHAR(64)  NOT NULL DEFAULT '',
     address             TEXT         NOT NULL DEFAULT '',
-    address_normalized  TEXT         NOT NULL DEFAULT '',   -- ключ дедупликации: адрес в нижнем регистре,
-                                                            -- без "ул./улица/д." и лишних знаков (заполняет загрузчик)
     latitude            DOUBLE PRECISION,
     longitude           DOUBLE PRECISION,
     UNIQUE (region, city, district, micro_district, street, house)
 );
+
+-- Функция нормализации адреса: нижний регистр, унификация сокращений,
+-- удаление пунктуации, схлопывание пробелов.
+CREATE OR REPLACE FUNCTION fn_normalize_address(
+    region TEXT, city TEXT, district TEXT,
+    micro_district TEXT, street TEXT, house TEXT
+) RETURNS TEXT AS $$
+DECLARE
+    result TEXT;
+BEGIN
+    result := lower(coalesce(region, '') || ' ' ||
+                    coalesce(city, '') || ' ' ||
+                    coalesce(district, '') || ' ' ||
+                    coalesce(micro_district, '') || ' ' ||
+                    coalesce(street, '') || ' ' ||
+                    coalesce(house, ''));
+    -- Унификация сокращений
+    result := regexp_replace(result, '\bул\.\b', 'улица', 'gi');
+    result := regexp_replace(result, '\buлица\b', 'улица', 'gi');
+    result := regexp_replace(result, '\bd\.\b', 'дом', 'gi');
+    result := regexp_replace(result, '\bдом\b', 'дом', 'gi');
+    result := regexp_replace(result, '\bпр-т\b', 'проспект', 'gi');
+    result := regexp_replace(result, '\bпроспект\b', 'проспект', 'gi');
+    -- Удаление пунктуации
+    result := regexp_replace(result, '[^a-zа-яё0-9 ]+', ' ');
+    -- Схлопывание пробелов и trim
+    result := trim(regexp_replace(result, ' {2,}', ' ', 'g'));
+    RETURN result;
+END;
+$$ LANGUAGE IMMUTABLE PARALLEL SAFE;
 
 CREATE TABLE developers (
     id                              SERIAL PRIMARY KEY,
@@ -104,8 +132,12 @@ CREATE TABLE residential_complexes (
     completion       VARCHAR(128),
     buildings_count  INT
 );
-CREATE UNIQUE INDEX ux_rc_name_developer
-    ON residential_complexes (name, COALESCE(developer_id, 0));
+
+-- PostgreSQL 15+: UNIQUE NULLS NOT DISTINCT
+ALTER TABLE residential_complexes
+    DROP INDEX IF EXISTS ux_rc_name_developer;
+ALTER TABLE residential_complexes
+    ADD CONSTRAINT ux_rc_name_developer UNIQUE NULLS NOT DISTINCT (name, developer_id);
 
 CREATE TABLE buildings (
     id                      BIGSERIAL PRIMARY KEY,
@@ -146,6 +178,10 @@ CREATE TABLE sellers (
     documents_verified  BOOLEAN
 );
 
+-- UNIQUE NULLS NOT DISTINCT для sellers
+ALTER TABLE sellers
+    ADD CONSTRAINT ux_sellers_site_name UNIQUE NULLS NOT DISTINCT (site_id, name);
+
 -- =====================================================
 -- 3. ЯДРО: properties / offers / attributes
 -- =====================================================
@@ -154,7 +190,6 @@ CREATE TABLE properties (
     id               BIGSERIAL PRIMARY KEY,
     canonical_name   VARCHAR(512),       -- формирует скрипт дедупликации
     description      TEXT,
-    image_url        TEXT,
     object_type_id   SMALLINT NOT NULL REFERENCES object_types(id),
     housing_type_id  SMALLINT REFERENCES housing_types(id),
     building_id      BIGINT   REFERENCES buildings(id),
@@ -165,12 +200,9 @@ CREATE TABLE properties (
     rooms_count      INT,
     floor            INT,
     ceiling_height   NUMERIC(5,2),
-    cadastral_number VARCHAR(64),
-    dedup_key        VARCHAR(32),        -- md5(address_normalized|object_type_id|floor|rooms_count|round(area))
-    search_vector    tsvector GENERATED ALWAYS AS (
-        to_tsvector('russian'::regconfig,
-                    coalesce(canonical_name, '') || ' ' || coalesce(description, ''))
-    ) STORED
+    cadastral_number VARCHAR(64)
+    -- dedup_key удалён: ключ вычисляется на лету скриптом дедупликации
+    -- search_vector удалён: GIN-индекс по выражению см. ниже
 );
 
 CREATE TABLE offers (
@@ -203,17 +235,15 @@ CREATE TABLE offers (
     parsed_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     match_method       VARCHAR(32),        -- cadastral / exact_key / fuzzy_address (метод дедупликации)
     match_confidence   NUMERIC(4,3),       -- 0.000 .. 1.000 (для оценки ложных срабатываний)
-    search_vector      tsvector GENERATED ALWAYS AS (
-        to_tsvector('russian'::regconfig,
-                    coalesce(name, '') || ' ' || coalesce(description, ''))
-    ) STORED,
+    -- search_vector удалён: GIN-индекс по выражению см. ниже
     UNIQUE (site_id, external_id)
 );
 
 CREATE TABLE offer_images (
     id        BIGSERIAL PRIMARY KEY,
     offer_id  BIGINT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-    url       TEXT   NOT NULL
+    url       TEXT   NOT NULL,
+    position INT NOT NULL DEFAULT 0
 );
 
 CREATE TABLE offer_tags (
@@ -232,38 +262,130 @@ CREATE TABLE offer_legal_info (
     maternity_capital_used  BOOLEAN
 );
 
-CREATE TABLE property_attributes (
-    id            BIGSERIAL PRIMARY KEY,
-    property_id   BIGINT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-    attribute_id  INT    NOT NULL REFERENCES attribute_definitions(id),
-    value_text    TEXT,
-    value_number  NUMERIC,
-    value_bool    BOOLEAN,
-    UNIQUE (property_id, attribute_id)
-);
+-- =====================================================
+-- 4. ТИПИЗИРОВАННЫЙ EAV (замена property_attributes / offer_attributes)
+-- =====================================================
 
-CREATE TABLE offer_attributes (
-    id            BIGSERIAL PRIMARY KEY,
-    offer_id      BIGINT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-    attribute_id  INT    NOT NULL REFERENCES attribute_definitions(id),
-    value_text    TEXT,
-    value_number  NUMERIC,
-    value_bool    BOOLEAN,
-    UNIQUE (offer_id, attribute_id)
+-- Триггерная функция для проверки соответствия типа значения
+CREATE OR REPLACE FUNCTION fn_check_attribute_value_type()
+RETURNS TRIGGER AS $$
+BEGIN
+    DECLARE
+        expected_type TEXT;
+    BEGIN
+        SELECT ad.value_type INTO expected_type
+        FROM attribute_definitions ad
+        WHERE ad.id = NEW.attribute_id;
+
+        IF TG_ARGV[0] = 'text' AND NEW.value_text IS NULL THEN
+            RAISE EXCEPTION 'value_text is NULL but attribute % expects text', NEW.attribute_id;
+        END IF;
+        IF TG_ARGV[0] = 'number' AND NEW.value_number IS NULL THEN
+            RAISE EXCEPTION 'value_number is NULL but attribute % expects number', NEW.attribute_id;
+        END IF;
+        IF TG_ARGV[0] = 'bool' AND NEW.value_bool IS NULL THEN
+            RAISE EXCEPTION 'value_bool is NULL but attribute % expects bool', NEW.attribute_id;
+        END IF;
+
+        RETURN NEW;
+    END;
+END;
+$$ LANGUAGE plpgsql;
+
+-- property_attributes_text
+CREATE TABLE property_attributes_text (
+    property_id BIGINT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    attribute_id INT NOT NULL REFERENCES attribute_definitions(id),
+    value TEXT NOT NULL,
+    PRIMARY KEY (property_id, attribute_id)
 );
+CREATE TRIGGER trg_pat_type_check
+    BEFORE INSERT OR UPDATE ON property_attributes_text
+    FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('text');
+
+-- property_attributes_number
+CREATE TABLE property_attributes_number (
+    property_id BIGINT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    attribute_id INT NOT NULL REFERENCES attribute_definitions(id),
+    value NUMERIC NOT NULL,
+    PRIMARY KEY (property_id, attribute_id)
+);
+CREATE TRIGGER trg_pan_type_check
+    BEFORE INSERT OR UPDATE ON property_attributes_number
+    FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('number');
+
+-- property_attributes_bool
+CREATE TABLE property_attributes_bool (
+    property_id BIGINT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    attribute_id INT NOT NULL REFERENCES attribute_definitions(id),
+    value BOOLEAN NOT NULL,
+    PRIMARY KEY (property_id, attribute_id)
+);
+CREATE TRIGGER trg_pab_type_check
+    BEFORE INSERT OR UPDATE ON property_attributes_bool
+    FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('bool');
+
+-- offer_attributes_text
+CREATE TABLE offer_attributes_text (
+    offer_id BIGINT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+    attribute_id INT NOT NULL REFERENCES attribute_definitions(id),
+    value TEXT NOT NULL,
+    PRIMARY KEY (offer_id, attribute_id)
+);
+CREATE TRIGGER tgt_oat_type_check
+    BEFORE INSERT OR UPDATE ON offer_attributes_text
+    FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('text');
+
+-- offer_attributes_number
+CREATE TABLE offer_attributes_number (
+    offer_id BIGINT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+    attribute_id INT NOT NULL REFERENCES attribute_definitions(id),
+    value NUMERIC NOT NULL,
+    PRIMARY KEY (offer_id, attribute_id)
+);
+CREATE TRIGGER tgt_oan_type_check
+    BEFORE INSERT OR UPDATE ON offer_attributes_number
+    FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('number');
+
+-- offer_attributes_bool
+CREATE TABLE offer_attributes_bool (
+    offer_id BIGINT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+    attribute_id INT NOT NULL REFERENCES attribute_definitions(id),
+    value BOOLEAN NOT NULL,
+    PRIMARY KEY (offer_id, attribute_id)
+);
+CREATE TRIGGER tgt_oab_type_check
+    BEFORE INSERT OR UPDATE ON offer_attributes_bool
+    FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('bool');
 
 -- =====================================================
--- 4. ИНДЕКСЫ
+-- 5. ИНДЕКСЫ
 -- =====================================================
+
+-- EAV текстовые: поиск по атрибуту + префикс значения
+CREATE INDEX ix_pat_attr_val ON property_attributes_text (attribute_id, left(value, 255));
+CREATE INDEX ix_oat_attr_val ON offer_attributes_text (attribute_id, left(value, 255));
+
+-- EAV числовые: поиск по атрибуту
+CREATE INDEX ix_pan_attr_val ON property_attributes_number (attribute_id, value);
+CREATE INDEX ix_oan_attr_val ON offer_attributes_number (attribute_id, value);
+
+-- EAV булевы: поиск по атрибуту
+CREATE INDEX ix_pab_attr_val ON property_attributes_bool (attribute_id, value);
+CREATE INDEX ix_oab_attr_val ON offer_attributes_bool (attribute_id, value);
 
 -- offers
--- (property_id, price): JOIN с properties + MIN(price) для списка результатов поиска
 CREATE INDEX ix_offers_property_price ON offers (property_id, price);
 CREATE INDEX ix_offers_seller         ON offers (seller_id);
 CREATE INDEX ix_offers_deal_type      ON offers (deal_type_id);
 CREATE INDEX ix_offers_price          ON offers (price);
 CREATE INDEX ix_offers_parsed_at      ON offers (parsed_at);
-CREATE INDEX ix_offers_search         ON offers USING gin (search_vector);
+
+-- GIN-индекс по выражению для offers (to_tsvector)
+CREATE INDEX ix_offers_search_fts ON offers USING gin (
+    to_tsvector('russian'::regconfig,
+        coalesce(name, '') || ' ' || coalesce(description, ''))
+);
 
 -- properties
 CREATE INDEX ix_properties_object_type ON properties (object_type_id);
@@ -274,53 +396,63 @@ CREATE INDEX ix_properties_area        ON properties (area);
 CREATE INDEX ix_properties_rooms       ON properties (rooms_count);
 CREATE INDEX ix_properties_floor       ON properties (floor);
 CREATE INDEX ix_properties_cadastral   ON properties (cadastral_number);
-CREATE INDEX ix_properties_dedup_key   ON properties (dedup_key);
 CREATE INDEX ix_properties_name_trgm   ON properties USING gin (canonical_name gin_trgm_ops);
-CREATE INDEX ix_properties_search      ON properties USING gin (search_vector);
 
--- locations
+-- GIN-индекс по выражению для properties (to_tsvector)
+CREATE INDEX ix_properties_search_fts ON properties USING gin (
+    to_tsvector('russian'::regconfig,
+        coalesce(canonical_name, '') || ' ' || coalesce(description, ''))
+);
+
+-- locations: GIN trigram по выражению fn_normalize_address
+CREATE INDEX ix_locations_addrnorm_expr ON locations USING gin (
+    fn_normalize_address(region, city, district, micro_district, street, house) gin_trgm_ops
+);
+-- Индексы по обычным полям
 CREATE INDEX ix_locations_city_district ON locations (city, district);
 CREATE INDEX ix_locations_street_house  ON locations (street, house);
 CREATE INDEX ix_locations_geo           ON locations USING gist (point(longitude, latitude));
 CREATE INDEX ix_locations_address_trgm  ON locations USING gin (address gin_trgm_ops);
-CREATE INDEX ix_locations_addrnorm      ON locations (address_normalized);
-CREATE INDEX ix_locations_addrnorm_trgm ON locations USING gin (address_normalized gin_trgm_ops);
 
 -- buildings / ЖК / продавцы
 CREATE INDEX ix_buildings_location ON buildings (location_id);
 CREATE INDEX ix_buildings_rc       ON buildings (residential_complex_id);
-CREATE INDEX ix_rc_name            ON residential_complexes (name);
-CREATE INDEX ix_rc_developer       ON residential_complexes (developer_id);
-CREATE INDEX ix_sellers_site_name  ON sellers (site_id, name);
+CREATE INDEX ix_sellers_site_name  ON sellers (site_id);
+
+-- offer_images
+CREATE INDEX ix_offer_images_offer ON offer_images (offer_id, position);
+CREATE INDEX ix_offer_images_pos   ON offer_images (offer_id, position);
 
 -- вспомогательные
-CREATE INDEX ix_offer_images_offer ON offer_images (offer_id);
 CREATE INDEX ix_offer_tags_tag     ON offer_tags (tag_id);
 CREATE INDEX ix_attr_def_category  ON attribute_definitions (category_id);
 
--- Атрибуты: текст индексируется по префиксу (иначе btree падает на очень длинных значениях).
--- В запросах нужно использовать то же выражение: WHERE attribute_id = ? AND left(value_text, 255) = ?
-CREATE INDEX ix_prop_attr_text  ON property_attributes (attribute_id, left(value_text, 255));
-CREATE INDEX ix_prop_attr_num   ON property_attributes (attribute_id, value_number)
-    WHERE value_number IS NOT NULL;
-CREATE INDEX ix_offer_attr_text ON offer_attributes (attribute_id, left(value_text, 255));
-CREATE INDEX ix_offer_attr_num  ON offer_attributes (attribute_id, value_number)
-    WHERE value_number IS NOT NULL;
-
 -- =====================================================
--- 5. ПРЕДСТАВЛЕНИЕ ДЛЯ ПОИСКА В ВЕБ-ПРИЛОЖЕНИИ
+-- 6. ПРЕДСТАВЛЕНИЕ ДЛЯ ПОИСКА В ВЕБ-ПРИЛОЖЕНИИ
 -- =====================================================
--- Список результатов: название, картинка, минимальная цена.
-CREATE VIEW v_property_search AS
+-- v_property_search: image_url берётся подзапросом по offer_images
+-- (ORDER BY position, id LIMIT 1), search_vector — выражение to_tsvector.
+-- ПРИМЕЧАНИЕ: view не индексируется. Поиск по тексту идёт по индексам
+-- ix_properties_search_fts и ix_offers_search_fts.
+CREATE OR REPLACE VIEW v_property_search AS
 SELECT p.id            AS property_id,
        p.canonical_name,
-       p.image_url,
+       (SELECT oi.url
+        FROM offer_images oi
+        WHERE oi.offer_id IN (
+            SELECT o.id FROM offers o WHERE o.property_id = p.id
+            ORDER BY oi.position, oi.id LIMIT 1
+        )
+        LIMIT 1
+       ) AS image_url,
        p.object_type_id,
        p.area,
        p.rooms_count,
        p.floor,
        p.location_id,
-       p.search_vector,
+       to_tsvector('russian'::regconfig,
+            coalesce(p.canonical_name, '') || ' ' || coalesce(p.description, ''))
+           AS search_vector,
        MIN(o.price)    AS min_price,
        COUNT(o.id)     AS offers_count
 FROM properties p
@@ -328,7 +460,7 @@ LEFT JOIN offers o ON o.property_id = p.id
 GROUP BY p.id;
 
 -- =====================================================
--- 6. СТАРТОВЫЕ ДАННЫЕ СПРАВОЧНИКОВ
+-- 7. СТАРТОВЫЕ ДАННЫЕ СПРАВОЧНИКОВ
 -- =====================================================
 
 INSERT INTO sites (code, name) VALUES

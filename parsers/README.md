@@ -224,3 +224,60 @@ HTML/JSON-фикстуры синтетические и смоделирова�
 Яндекса. Покрыты маппинг полей, fallback-источники, пагинация,
 дедупликация, retry/backoff, обработка капчи, фабрика, точка запуска и
 регрессия Avito/Cian.
+
+## 3НФ и вычисляемые поля
+
+### Типизированный EAV
+
+Вместо одной таблицы `property_attributes`/`offer_attributes` со столбцами
+`value_text`/`value_number`/`value_bool` используются 6 отдельных таблиц:
+
+| Таблица | Назначение |
+| --- | --- |
+| `property_attributes_text` | Характеристики property — текст |
+| `property_attributes_number` | Характеристики property — число |
+| `property_attributes_bool` | Характеристики property — bool |
+| `offer_attributes_text` | Характеристики offer — текст |
+| `offer_attributes_number` | Характеристики offer — число |
+| `offer_attributes_bool` | Характеристики offer — bool |
+
+Триггер `fn_check_attribute_value_type()` не позволяет вставить значение
+не того типа, что указан в `attribute_definitions.value_type`.
+
+**Почему так:**
+- Типизация на уровне таблиц — СУБД гарантирует целостность данных.
+- Нет NULL-колонок — каждая строка содержит только одно значение.
+- Индексы по узким типам (`NUMERIC`, `BOOLEAN`) работают быстрее.
+
+### Вычисляемые поля
+
+| Поле | Статус |
+| --- | --- |
+| `locations.address_normalized` | Удалён. Функция `fn_normalize_address(region, city, district, micro_district, street, house)` + GIN-индекс по выражению. |
+| `properties.dedup_key` | Удалён. Формула: `md5(fn_normalize_address(...) || object_type_id || floor || rooms_count || round(area))`. Вычисляется на лету скриптом дедупликации. |
+| `properties.image_url` | Удалён. Главное фото: `SELECT url FROM offer_images WHERE offer_id IN (...) ORDER BY position, id LIMIT 1`. |
+| `properties.search_vector` / `offers.search_vector` | Удалены. GIN-индексы по выражению `to_tsvector('russian', coalesce(name,'')||' '||coalesce(description,''))`. |
+
+### Загрузка в БД
+
+Пакет `parsers/db/` содержит загрузчик JSON → PostgreSQL:
+
+```bash
+# Загрузить все файлы
+uv run python db/db_migrator.py
+
+# Только Avito, 10 объявлений
+uv run python db/db_migrator.py --site avito --limit 10
+
+# Dry-run (без коммита)
+uv run python db/db_migrator.py --dry-run
+```
+
+Конфигурация подключения — `.env` в корне проекта:
+```
+DB_HOST=localhost
+DB_PORT=5433
+POSTGRES_DB=db
+POSTGRES_USER=user
+POSTGRES_PASSWORD=password
+```
