@@ -52,7 +52,8 @@ CREATE TABLE attribute_definitions (
     category_id  SMALLINT     REFERENCES attribute_categories(id),
     code         VARCHAR(64)  NOT NULL UNIQUE,
     name         VARCHAR(255) NOT NULL,
-    value_type   VARCHAR(16)  NOT NULL DEFAULT 'text',  -- text / number / bool
+    value_type   VARCHAR(16)  NOT NULL DEFAULT 'text'
+                              CHECK (value_type IN ('text', 'number', 'bool')),
     unit         VARCHAR(32)
 );
 
@@ -96,20 +97,18 @@ BEGIN
                     coalesce(micro_district, '') || ' ' ||
                     coalesce(street, '') || ' ' ||
                     coalesce(house, ''));
-    -- Унификация сокращений
-    result := regexp_replace(result, '\bул\.\b', 'улица', 'gi');
-    result := regexp_replace(result, '\buлица\b', 'улица', 'gi');
-    result := regexp_replace(result, '\bd\.\b', 'дом', 'gi');
-    result := regexp_replace(result, '\bдом\b', 'дом', 'gi');
-    result := regexp_replace(result, '\bпр-т\b', 'проспект', 'gi');
-    result := regexp_replace(result, '\bпроспект\b', 'проспект', 'gi');
+    -- Унификация сокращений. Границы слов заданы явными классами символов
+    -- (\b в PostgreSQL = backspace, а \y/\m/\M зависят от локали для кириллицы).
+    result := regexp_replace(result, '(^|[^a-zа-яё0-9])ул\.?(?![a-zа-яё0-9])',        '\1улица',    'g');
+    result := regexp_replace(result, '(^|[^a-zа-яё0-9])д\.?(?![a-zа-яё0-9])',         '\1дом',      'g');
+    result := regexp_replace(result, '(^|[^a-zа-яё0-9])пр-?(кт|т)\.?(?![a-zа-яё0-9])', '\1проспект', 'g');
     -- Удаление пунктуации
-    result := regexp_replace(result, '[^a-zа-яё0-9 ]+', ' ');
+    result := regexp_replace(result, '[^a-zа-яё0-9 ]+', ' ', 'g');
     -- Схлопывание пробелов и trim
     result := trim(regexp_replace(result, ' {2,}', ' ', 'g'));
     RETURN result;
 END;
-$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE; -- <-- ИСПРАВЛЕНО ЗДЕСЬ
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
 CREATE TABLE developers (
     id                              SERIAL PRIMARY KEY,
@@ -134,7 +133,6 @@ CREATE TABLE residential_complexes (
 );
 
 -- PostgreSQL 15+: UNIQUE NULLS NOT DISTINCT
-DROP INDEX IF EXISTS ux_rc_name_developer;
 ALTER TABLE residential_complexes
     ADD CONSTRAINT ux_rc_name_developer UNIQUE NULLS NOT DISTINCT (name, developer_id);
 
@@ -265,29 +263,32 @@ CREATE TABLE offer_legal_info (
 -- 4. ТИПИЗИРОВАННЫЙ EAV (замена property_attributes / offer_attributes)
 -- =====================================================
 
--- Триггерная функция для проверки соответствия типа значения
+-- Триггерная функция для проверки соответствия типа значения.
+-- TG_ARGV[0] = тип таблицы ('text' / 'number' / 'bool'); он должен совпадать
+-- с attribute_definitions.value_type. Во всех EAV-таблицах столбец называется value.
 CREATE OR REPLACE FUNCTION fn_check_attribute_value_type()
 RETURNS TRIGGER AS $$
+DECLARE
+    expected_type TEXT;
 BEGIN
-    DECLARE
-        expected_type TEXT;
-    BEGIN
-        SELECT ad.value_type INTO expected_type
-        FROM attribute_definitions ad
-        WHERE ad.id = NEW.attribute_id;
+    SELECT ad.value_type INTO expected_type
+    FROM attribute_definitions ad
+    WHERE ad.id = NEW.attribute_id;
 
-        IF TG_ARGV[0] = 'text' AND NEW.value_text IS NULL THEN
-            RAISE EXCEPTION 'value_text is NULL but attribute % expects text', NEW.attribute_id;
-        END IF;
-        IF TG_ARGV[0] = 'number' AND NEW.value_number IS NULL THEN
-            RAISE EXCEPTION 'value_number is NULL but attribute % expects number', NEW.attribute_id;
-        END IF;
-        IF TG_ARGV[0] = 'bool' AND NEW.value_bool IS NULL THEN
-            RAISE EXCEPTION 'value_bool is NULL but attribute % expects bool', NEW.attribute_id;
-        END IF;
+    IF expected_type IS NULL THEN
+        RAISE EXCEPTION 'attribute % not found in attribute_definitions', NEW.attribute_id;
+    END IF;
 
-        RETURN NEW;
-    END;
+    IF expected_type <> TG_ARGV[0] THEN
+        RAISE EXCEPTION 'attribute % has value_type=%, but % table is used',
+            NEW.attribute_id, expected_type, TG_ARGV[0];
+    END IF;
+
+    IF NEW.value IS NULL THEN
+        RAISE EXCEPTION 'value is NULL for attribute %', NEW.attribute_id;
+    END IF;
+
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -331,7 +332,7 @@ CREATE TABLE offer_attributes_text (
     value TEXT NOT NULL,
     PRIMARY KEY (offer_id, attribute_id)
 );
-CREATE TRIGGER tgt_oat_type_check
+CREATE TRIGGER trg_oat_type_check
     BEFORE INSERT OR UPDATE ON offer_attributes_text
     FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('text');
 
@@ -342,7 +343,7 @@ CREATE TABLE offer_attributes_number (
     value NUMERIC NOT NULL,
     PRIMARY KEY (offer_id, attribute_id)
 );
-CREATE TRIGGER tgt_oan_type_check
+CREATE TRIGGER trg_oan_type_check
     BEFORE INSERT OR UPDATE ON offer_attributes_number
     FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('number');
 
@@ -353,7 +354,7 @@ CREATE TABLE offer_attributes_bool (
     value BOOLEAN NOT NULL,
     PRIMARY KEY (offer_id, attribute_id)
 );
-CREATE TRIGGER tgt_oab_type_check
+CREATE TRIGGER trg_oab_type_check
     BEFORE INSERT OR UPDATE ON offer_attributes_bool
     FOR EACH ROW EXECUTE FUNCTION fn_check_attribute_value_type('bool');
 
@@ -413,14 +414,12 @@ CREATE INDEX ix_locations_street_house  ON locations (street, house);
 CREATE INDEX ix_locations_geo           ON locations USING gist (point(longitude, latitude));
 CREATE INDEX ix_locations_address_trgm  ON locations USING gin (address gin_trgm_ops);
 
--- buildings / ЖК / продавцы
+-- buildings / ЖК (индекс по sellers.site_id не нужен: покрыт UNIQUE (site_id, name))
 CREATE INDEX ix_buildings_location ON buildings (location_id);
 CREATE INDEX ix_buildings_rc       ON buildings (residential_complex_id);
-CREATE INDEX ix_sellers_site_name  ON sellers (site_id);
 
 -- offer_images
 CREATE INDEX ix_offer_images_offer ON offer_images (offer_id, position);
-CREATE INDEX ix_offer_images_pos   ON offer_images (offer_id, position);
 
 -- вспомогательные
 CREATE INDEX ix_offer_tags_tag     ON offer_tags (tag_id);
@@ -430,7 +429,7 @@ CREATE INDEX ix_attr_def_category  ON attribute_definitions (category_id);
 -- 6. ПРЕДСТАВЛЕНИЕ ДЛЯ ПОИСКА В ВЕБ-ПРИЛОЖЕНИИ
 -- =====================================================
 -- v_property_search: image_url берётся подзапросом по offer_images
--- (ORDER BY position, id LIMIT 1), search_vector — выражение to_tsvector.
+-- среди всех объявлений объекта (ORDER BY position, id LIMIT 1), search_vector — выражение to_tsvector.
 -- ПРИМЕЧАНИЕ: view не индексируется. Поиск по тексту идёт по индексам
 -- ix_properties_search_fts и ix_offers_search_fts.
 CREATE OR REPLACE VIEW v_property_search AS
@@ -438,10 +437,9 @@ SELECT p.id            AS property_id,
        p.canonical_name,
        (SELECT oi.url
         FROM offer_images oi
-        WHERE oi.offer_id IN (
-            SELECT o.id FROM offers o WHERE o.property_id = p.id
-            ORDER BY oi.position, oi.id LIMIT 1
-        )
+        JOIN offers oo ON oo.id = oi.offer_id
+        WHERE oo.property_id = p.id
+        ORDER BY oi.position, oi.id
         LIMIT 1
        ) AS image_url,
        p.object_type_id,

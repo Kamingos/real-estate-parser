@@ -1,11 +1,10 @@
 ================================================================================
 СТРУКТУРА БД: ИНТЕГРАЦИОННАЯ БАЗА ОБЪЯВЛЕНИЙ О НЕДВИЖИМОСТИ (PostgreSQL 15+)
 ================================================================================
-Файлы проекта: init_db.sql (схема с нуля), migrations/001_3nf.sql (миграция
-со старой схемы), real_estate_er.drawio (ER-диаграмма), db_structure.txt (этот файл).
+Файлы проекта: init_db.sql (схема с нуля), migrations/001_3nf.sql, 002 и 003_fixes.sql (миграции), real_estate_er.drawio (ER-диаграмма), db_structure.txt (этот файл).
 
-Описание приведено в соответствие с init_db.sql. Места, где SQL содержит ошибки
-или расходится с замыслом, вынесены в раздел 10.
+Описание соответствует исправленному init_db.sql (для уже созданных БД -
+migrations/003_fixes.sql; список исправлений - раздел 10).
 
 1. ОБЩЕЕ ОПИСАНИЕ
 --------------------------------------------------------------------------------
@@ -68,7 +67,7 @@ tag_types            : badge, feature_chip, infrastructure, promotion, courtyard
 attribute_categories : flat, engineering, land, accessibility, site_data
 
 attribute_definitions: id SERIAL, category_id (FK, NULLABLE), code UNIQUE, name,
-                       value_type ('text'|'number'|'bool', DEFAULT 'text'), unit
+                       value_type ('text'|'number'|'bool', DEFAULT 'text', CHECK), unit
   Предзаполненные коды (30):
     flat          : bathroom, balcony, window_view, repairs, finishing,
                     sell_with_furniture (bool), furniture, rooms_in_flat (number)
@@ -168,16 +167,17 @@ offer_attributes_number   : offer_id, attribute_id, value NUMERIC NOT NULL     (
 offer_attributes_bool     : offer_id, attribute_id, value BOOLEAN NOT NULL     (PK)
 
 Триггеры BEFORE INSERT OR UPDATE на каждой из 6 EAV-таблиц вызывают
-fn_check_attribute_value_type('text'|'number'|'bool'). Замысел: убедиться, что
-attribute_definitions.value_type совпадает с типом таблицы. Фактическое состояние
-функции — см. раздел 10 (п. 1).
-Имена триггеров: trg_pat/pan/pab_type_check (property_*), tgt_oat/oan/oab_type_check (offer_*).
+fn_check_attribute_value_type('text'|'number'|'bool'). Функция проверяет, что
+атрибут существует, его attribute_definitions.value_type совпадает с типом таблицы
+и value не NULL. Запись числового атрибута в *_text (и наоборот) отклоняется.
+Имена триггеров: trg_pat/pan/pab_type_check (property_*), trg_oat/oan/oab_type_check (offer_*).
 
 v_property_search (VIEW для веб-приложения)
   property_id, canonical_name, image_url, object_type_id, area, rooms_count, floor,
   location_id, search_vector (выражение to_tsvector), min_price (MIN(offers.price)),
   offers_count (COUNT(offers.id)); LEFT JOIN offers, GROUP BY p.id.
-  image_url - коррелированный подзапрос по offer_images (см. раздел 10, п. 2).
+  image_url - коррелированный подзапрос: первое фото (ORDER BY position, id LIMIT 1)
+  среди всех объявлений объекта.
   ПРИМЕЧАНИЕ: view не индексируется. Поиск по тексту идёт по индексам
   ix_properties_search_fts и ix_offers_search_fts.
 
@@ -297,11 +297,9 @@ locations:
 
 buildings: ix_buildings_location (location_id), ix_buildings_rc (residential_complex_id)
 residential_complexes: UNIQUE NULLS NOT DISTINCT (name, developer_id)
-sellers: UNIQUE NULLS NOT DISTINCT (site_id, name); ix_sellers_site_name (site_id)
-         - название индекса вводит в заблуждение, он только по site_id (см. п. 4 раздела 10)
+sellers: UNIQUE NULLS NOT DISTINCT (site_id, name) (покрывает поиск по site_id)
 
 offer_images: ix_offer_images_offer (offer_id, position)
-              ix_offer_images_pos   (offer_id, position)  <- дубликат (см. п. 4 раздела 10)
 offer_tags: PK(offer_id, tag_id), ix_offer_tags_tag (tag_id)
 attribute_definitions: ix_attr_def_category (category_id)
 
@@ -378,37 +376,18 @@ attribute_definitions: ix_attr_def_category (category_id)
 - Флагов is_studio / is_free_layout (покрывают object_type и rooms_count_raw).
 
 
-10. ИЗВЕСТНЫЕ ПРОБЛЕМЫ ТЕКУЩЕГО init_db.sql (требуют исправления)
+10. ИСПРАВЛЕНИЯ (init_db.sql / migrations/003_fixes.sql)
 --------------------------------------------------------------------------------
-1. fn_check_attribute_value_type() не работает.
-   - Переменная expected_type (value_type из attribute_definitions) читается, но
-     не сравнивается с типом таблицы (TG_ARGV[0]).
-   - Функция обращается к NEW.value_text / NEW.value_number / NEW.value_bool,
-     а во всех 6 EAV-таблицах колонка называется value. Результат: любой INSERT/UPDATE
-     в EAV-таблицы завершится ошибкой «record "new" has no field ...».
-   - Исправление: сравнивать ad.value_type с TG_ARGV[0] и не обращаться к
-     несуществующим полям.
-
-2. v_property_search.image_url выбирает фото неверно.
-   ORDER BY oi.position, oi.id LIMIT 1 стоит внутри подзапроса по offers, а не по
-   offer_images. Берётся фото одного произвольного объявления, а не первое по position
-   среди всех объявлений объекта.
-   Исправление: JOIN offers/offer_images внутри одного подзапроса с
-   ORDER BY oi.position, oi.id LIMIT 1 (или LATERAL).
-
-3. fn_normalize_address() нормализует неполно.
-   - В PostgreSQL \b — это backspace, граница слова — \y; замены ул./пр-т/дом не срабатывают.
-   - В шаблонах '\buлица\b' и '\bd\.\b' латинские буквы u и d вместо кириллических.
-   - В regexp_replace для удаления пунктуации нет флага 'g': заменяется только
-     первое вхождение.
-   Влияние: GIN-индекс ix_locations_addrnorm_expr и сопоставление fuzzy_address
-   дают худший результат, чем задумано.
-
-4. Лишние индексы.
-   - ix_offer_images_offer и ix_offer_images_pos идентичны (offer_id, position).
-   - ix_sellers_site_name построен по (site_id) и перекрывается UNIQUE (site_id, name).
-
-5. Мелкие несоответствия.
-   - Префиксы триггеров различаются (trg_ у property_*, tgt_ у offer_*).
-   - В SQL остался лишний DROP INDEX IF EXISTS ux_rc_name_developer.
+1. fn_check_attribute_value_type(): обращалась к несуществующим NEW.value_text/
+   value_number/value_bool (любая вставка в EAV падала), тип не сверялся.
+   Теперь используется NEW.value, тип сверяется с attribute_definitions.value_type.
+2. v_property_search.image_url: ORDER BY ... LIMIT 1 теперь применяется к
+   offer_images среди всех объявлений объекта, а не к одному произвольному offers.
+3. fn_normalize_address(): заменены \b (backspace в PostgreSQL) на явные границы
+   слов, латинские u/d - на кириллицу (ул., д., пр-т/пр-кт), добавлен флаг 'g' при
+   удалении пунктуации. Индекс ix_locations_addrnorm_expr пересоздаётся (REINDEX).
+4. Удалены ix_offer_images_pos (дубликат) и ix_sellers_site_name (перекрыт UNIQUE).
+5. Триггеры offer_attributes_*: префикс tgt_ -> trg_. Удалён лишний DROP INDEX.
+6. Добавлен CHECK на attribute_definitions.value_type (text/number/bool).
+Загрузчик должен выбирать EAV-таблицу по attribute_definitions.value_type.
 ================================================================================
