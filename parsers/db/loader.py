@@ -439,6 +439,42 @@ def _insert_property_attributes(
                 )
 
 
+_OFFER_ATTR_TABLES: dict[str, str] = {
+    "text": "offer_attributes_text",
+    "number": "offer_attributes_number",
+    "bool": "offer_attributes_bool",
+}
+
+
+def _resolve_attribute(
+    conn: psycopg.Connection,
+    attr_code: str,
+    label: str,
+    val_type: str,
+    normalized: Any,
+) -> tuple[int, str, Any]:
+    """Вернуть (attribute_id, тип таблицы, значение), согласованные с определением.
+
+    Тип атрибута задаёт справочник attribute_definitions, а не конкретное значение:
+    один и тот же код может прийти как текст, число или bool на разных сайтах.
+    """
+    attr_id, def_type = upsert_attribute_definition(conn, "site_data", attr_code, label, val_type)
+    if def_type == val_type:
+        return attr_id, val_type, normalized
+
+    # Определение уже существует с другим типом.
+    if def_type == "text":
+        # Любое значение можно сохранить как текст
+        if val_type == "bool":
+            return attr_id, "text", "Да" if normalized else "Нет"
+        return attr_id, "text", str(normalized)
+
+    # def_type = number/bool, а значение другого типа -> отдельный атрибут
+    alt_code = f"{attr_code}_{val_type}"
+    alt_id, alt_type = upsert_attribute_definition(conn, "site_data", alt_code, label, val_type)
+    return alt_id, alt_type, normalized
+
+
 def _insert_offer_attributes(
     conn: psycopg.Connection,
     offer_id: int,
@@ -460,19 +496,12 @@ def _insert_offer_attributes(
         attr_code = _normalize_parameters_label(key)
         val_type, normalized = get_value_type(key, val)
         with conn.cursor() as cur:
-            attr_id, _ = upsert_attribute_definition(conn, "site_data", attr_code, str(key), val_type)
-            if val_type == "text":
-                cur.execute(
-                    "INSERT INTO offer_attributes_text (offer_id, attribute_id, value) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                    (offer_id, attr_id, str(normalized)),
-                )
-            elif val_type == "number":
-                cur.execute(
-                    "INSERT INTO offer_attributes_number (offer_id, attribute_id, value) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                    (offer_id, attr_id, normalized),
-                )
-            elif val_type == "bool":
-                cur.execute(
-                    "INSERT INTO offer_attributes_bool (offer_id, attribute_id, value) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                    (offer_id, attr_id, normalized),
-                )
+            attr_id, val_type, normalized = _resolve_attribute(
+                conn, attr_code, str(key), val_type, normalized,
+            )
+            table = _OFFER_ATTR_TABLES[val_type]
+            cur.execute(
+                f"INSERT INTO {table} (offer_id, attribute_id, value) "
+                "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                (offer_id, attr_id, str(normalized) if val_type == "text" else normalized),
+            )

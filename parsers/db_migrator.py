@@ -130,10 +130,14 @@ def main() -> None:
         logger.error("Не удалось подключиться к БД: %s", e)
         sys.exit(1)
 
+    stop = False
+
     try:
         _load_cache(conn, cache)
 
         for filepath in resolved_files:
+            if stop:
+                break
             logger.info("Читаю файл: %s", filepath)
             try:
                 with open(filepath, "r", encoding="utf-8") as f:
@@ -159,31 +163,32 @@ def main() -> None:
 
                 if args.limit and count >= args.limit:
                     logger.info("Достигнут лимит: %d", args.limit)
+                    stop = True
                     break
 
                 count += 1
 
                 try:
-                    with conn.cursor() as cur:
-                        cur.execute("BEGIN")
-                        stats = load_offer(conn, item, cache, dry_run=is_dry_run)
-                        for k, v in stats.items():
-                            total_stats[k] = total_stats.get(k, 0) + v
-                        if is_dry_run:
-                            cur.execute("ROLLBACK")
-                            logger.debug("Rollback для объявления #%d", count)
-                        else:
-                            cur.execute("COMMIT")
+                    # psycopg при autocommit=False сам открывает транзакцию
+                    stats = load_offer(conn, item, cache, dry_run=is_dry_run)
+                    for k, v in stats.items():
+                        total_stats[k] = total_stats.get(k, 0) + v
+                    if is_dry_run:
+                        conn.rollback()
+                        logger.debug("Rollback для объявления #%d", count)
+                    else:
+                        conn.commit()
                 except Exception as e:
                     logger.error("Ошибка при загрузке объявления #%d: %s", count, e)
                     try:
                         conn.rollback()
                     except Exception:
                         pass
+                    total_stats["errors"] += 1
                     if not args.skip_errors:
                         logger.error("Прерываю выполнение (--skip-errors не указан)")
+                        stop = True
                         break
-                    total_stats["errors"] += 1
 
         logger.info("=" * 60)
         logger.info("ИТОГОВАЯ СТАТИСТИКА:")
