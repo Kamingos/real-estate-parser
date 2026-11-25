@@ -109,7 +109,7 @@ BEGIN
     result := trim(regexp_replace(result, ' {2,}', ' ', 'g'));
     RETURN result;
 END;
-$$ LANGUAGE IMMUTABLE PARALLEL SAFE;
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE; -- <-- ИСПРАВЛЕНО ЗДЕСЬ
 
 CREATE TABLE developers (
     id                              SERIAL PRIMARY KEY,
@@ -134,8 +134,7 @@ CREATE TABLE residential_complexes (
 );
 
 -- PostgreSQL 15+: UNIQUE NULLS NOT DISTINCT
-ALTER TABLE residential_complexes
-    DROP INDEX IF EXISTS ux_rc_name_developer;
+DROP INDEX IF EXISTS ux_rc_name_developer;
 ALTER TABLE residential_complexes
     ADD CONSTRAINT ux_rc_name_developer UNIQUE NULLS NOT DISTINCT (name, developer_id);
 
